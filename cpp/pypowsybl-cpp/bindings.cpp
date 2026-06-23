@@ -647,6 +647,45 @@ PYBIND11_MODULE(_pypowsybl, m) {
     m.def("run_loadflow", &pypowsybl::runLoadFlow, "Run a load flow", py::call_guard<py::gil_scoped_release>(),
           py::arg("network"), py::arg("parameters"), py::arg("provider"), py::arg("report_node"));
 
+        m.def("get_ybus_matrix", &pypowsybl::getYbusMatrix, "Get Ybus matrix (OpenLoadFlow only)", py::call_guard<py::gil_scoped_release>(),
+            py::arg("network"), py::arg("parameters"), py::arg("provider"));
+
+    m.def("get_ybus_csr_matrix", [](const pypowsybl::JavaHandle& network,
+                                     const pypowsybl::LoadFlowParameters& parameters,
+                                     const std::string& provider) {
+        csr_matrix* csr = pypowsybl::getYbusCsrMatrix(network, parameters, provider);
+        py::array_t<double> data(csr->nnz);
+        py::array_t<int> indices(csr->nnz);
+        py::array_t<int> indptr(csr->row_count + 1);
+
+        auto dataView = data.mutable_unchecked<1>();
+        auto indicesView = indices.mutable_unchecked<1>();
+        auto indptrView = indptr.mutable_unchecked<1>();
+
+        for (int i = 0; i < csr->nnz; i++) {
+            dataView(i) = csr->data[i];
+            indicesView(i) = csr->indices[i];
+        }
+        for (int i = 0; i < csr->row_count + 1; i++) {
+            indptrView(i) = csr->indptr[i];
+        }
+
+        int rowCount = csr->row_count;
+        int columnCount = csr->column_count;
+        pypowsybl::freeYbusCsrMatrix(csr);
+        return py::make_tuple(data, indices, indptr, py::make_tuple(rowCount, columnCount));
+    }, "Get Ybus matrix in CSR format (OpenLoadFlow only)",
+       py::arg("network"), py::arg("parameters"), py::arg("provider"));
+
+     m.def("get_ybus_labels", [](const pypowsybl::JavaHandle& network,
+                                            const pypowsybl::LoadFlowParameters& parameters,
+                                            const std::string& provider) {
+          return py::make_tuple(
+                pypowsybl::getYbusRowLabels(network, parameters, provider),
+                pypowsybl::getYbusColumnLabels(network, parameters, provider));
+     }, "Get Ybus row and column labels (OpenLoadFlow only)",
+         py::arg("network"), py::arg("parameters"), py::arg("provider"));
+
     m.def("run_loadflow_async", &runLoadFlowAsyncPython, "Run a load flow asynchronously", py::call_guard<py::gil_scoped_release>(),
           py::arg("network"), py::arg("variant_id"), py::arg("parameters"), py::arg("provider"), py::arg("report_node"),
           py::arg("results_future"));

@@ -758,6 +758,16 @@ void reduceNetwork(const JavaHandle& network, const double v_min, const double v
 
 LoadFlowComponentResultArray* runLoadFlow(const JavaHandle& network, const LoadFlowParameters& parameters, const std::string& provider, JavaHandle* reportNode);
 
+matrix* getYbusMatrix(const JavaHandle& network, const LoadFlowParameters& parameters, const std::string& provider);
+
+csr_matrix* getYbusCsrMatrix(const JavaHandle& network, const LoadFlowParameters& parameters, const std::string& provider);
+
+void freeYbusCsrMatrix(csr_matrix* ybusCsrMatrix);
+
+std::vector<std::string> getYbusRowLabels(const JavaHandle& network, const LoadFlowParameters& parameters, const std::string& provider);
+
+std::vector<std::string> getYbusColumnLabels(const JavaHandle& network, const LoadFlowParameters& parameters, const std::string& provider);
+
 SeriesArray* runLoadFlowValidation(const JavaHandle& network, validation_type validationType, const LoadFlowValidationParameters& validationParameters);
 
 void writeSingleLineDiagramSvg(const JavaHandle& network, const std::string& containerId, const std::string& svgFile, const std::string& metadataFile, const SldParameters& parameters, dataframe* labels, dataframe* feeders_info, dataframe* styles);

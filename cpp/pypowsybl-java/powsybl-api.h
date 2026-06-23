@@ -286,6 +286,15 @@ typedef struct matrix_struct {
     double* values;
 } matrix;
 
+typedef struct csr_matrix_struct {
+    int row_count;
+    int column_count;
+    int nnz;
+    double* data;
+    int* indices;
+    int* indptr;
+} csr_matrix;
+
 typedef struct series_struct {
     char* name;
     unsigned char index;
