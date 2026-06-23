@@ -1010,6 +1010,34 @@ LoadFlowComponentResultArray* runLoadFlow(const JavaHandle& network, const LoadF
             PowsyblCaller::get()->callJava<array*>(::runLoadFlow, network, c_parameters.get(), (char *) provider.data(), (reportNode == nullptr) ? nullptr : *reportNode));
 }
 
+matrix* getYbusMatrix(const JavaHandle& network, const LoadFlowParameters& parameters, const std::string& provider) {
+    auto c_parameters = parameters.to_c_struct();
+    return PowsyblCaller::get()->callJava<matrix*>(::getYbusMatrix, network, c_parameters.get(), (char*) provider.c_str());
+}
+
+csr_matrix* getYbusCsrMatrix(const JavaHandle& network, const LoadFlowParameters& parameters, const std::string& provider) {
+    auto c_parameters = parameters.to_c_struct();
+    return PowsyblCaller::get()->callJava<csr_matrix*>(::getYbusCsrMatrix, network, c_parameters.get(), (char*) provider.c_str());
+}
+
+void freeYbusCsrMatrix(csr_matrix* ybusCsrMatrix) {
+    PowsyblCaller::get()->callJava(::freeYbusCsrMatrix, ybusCsrMatrix);
+}
+
+std::vector<std::string> getYbusRowLabels(const JavaHandle& network, const LoadFlowParameters& parameters, const std::string& provider) {
+    auto c_parameters = parameters.to_c_struct();
+    auto labelsArrayPtr = PowsyblCaller::get()->callJava<array*>(::getYbusRowLabels, network, c_parameters.get(), (char*) provider.c_str());
+    ToStringVector labels(labelsArrayPtr);
+    return labels.get();
+}
+
+std::vector<std::string> getYbusColumnLabels(const JavaHandle& network, const LoadFlowParameters& parameters, const std::string& provider) {
+    auto c_parameters = parameters.to_c_struct();
+    auto labelsArrayPtr = PowsyblCaller::get()->callJava<array*>(::getYbusColumnLabels, network, c_parameters.get(), (char*) provider.c_str());
+    ToStringVector labels(labelsArrayPtr);
+    return labels.get();
+}
+
 SeriesArray* runLoadFlowValidation(const JavaHandle& network, validation_type validationType, const LoadFlowValidationParameters& loadflow_validation_parameters) {
     auto c_validation_parameters = loadflow_validation_parameters.to_c_struct();
     return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::runLoadFlowValidation, network, validationType, c_validation_parameters.get()));

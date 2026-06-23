@@ -779,6 +779,46 @@ public final class PyPowsyblApiHeader {
         void setColumnCount(int columnCount);
     }
 
+    @CStruct("csr_matrix")
+    public interface CsrMatrixPointer extends PointerBase {
+
+        @CField("data")
+        CDoublePointer getData();
+
+        @CField("data")
+        void setData(CDoublePointer data);
+
+        @CField("indices")
+        CIntPointer getIndices();
+
+        @CField("indices")
+        void setIndices(CIntPointer indices);
+
+        @CField("indptr")
+        CIntPointer getIndptr();
+
+        @CField("indptr")
+        void setIndptr(CIntPointer indptr);
+
+        @CField("nnz")
+        int getNnz();
+
+        @CField("nnz")
+        void setNnz(int nnz);
+
+        @CField("row_count")
+        int getRowCount();
+
+        @CField("row_count")
+        void setRowCount(int rowCount);
+
+        @CField("column_count")
+        int getColumnCount();
+
+        @CField("column_count")
+        void setColumnCount(int columnCount);
+    }
+
     @CStruct("series")
     public interface SeriesPointer extends PointerBase {
 
