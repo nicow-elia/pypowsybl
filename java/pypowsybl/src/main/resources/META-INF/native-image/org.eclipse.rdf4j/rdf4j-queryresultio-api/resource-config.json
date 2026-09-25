@@ -1,0 +1,9 @@
+{
+  "resources":{
+  "includes":[
+    {"pattern":"\\QMETA-INF/services/org.eclipse.rdf4j.query.resultio.TupleQueryResultParserFactory\\E"},
+    {"pattern":"\\QMETA-INF/services/org.eclipse.rdf4j.query.resultio.BooleanQueryResultParserFactory\\E"},
+    {"pattern":"\\QMETA-INF/services/org.eclipse.rdf4j.query.resultio.TupleQueryResultWriterFactory\\E"},
+    {"pattern":"\\QMETA-INF/services/org.eclipse.rdf4j.query.resultio.BooleanQueryResultWriterFactory\\E"}
+  ]}
+}

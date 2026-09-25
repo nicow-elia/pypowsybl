@@ -341,6 +341,8 @@ I/O
    Network.update_from_file
    Network.update_from_binary_buffer
    Network.update_from_binary_buffers
+   Network.update_from_string
+   Network.event_recorder
    Network.dump
    Network.dump_to_string
    get_import_formats
@@ -351,6 +353,53 @@ I/O
    Network.save
    Network.save_to_string
    Network.save_to_binary_buffer
+
+
+Recording and exporting changes
+-------------------------------
+
+The changes made to a network can be recorded and exported as CGMES update documents, see
+:doc:`../user_guide/network_changes_export`.
+
+.. autosummary::
+   :nosignatures:
+
+    NetworkEventRecorder
+
+.. include it in the toctree
+.. toctree::
+   :hidden:
+
+   network/network_event_recorder
+
+
+Loading through an RDF database
+-------------------------------
+
+CGMES instance files can be read once into a SPARQL graph database and turned into networks from there, see
+:doc:`../user_guide/rdf_database`.
+
+.. autosummary::
+   :toctree: api/
+   :nosignatures:
+
+   connect_rdf_db
+   from_rdf_db
+   Network.update_from_rdf_db
+   Network.rdf_db_identity
+   Network.variants_binding
+
+.. autosummary::
+   :nosignatures:
+
+    RdfDatabase
+    RdfDbVariantRefusedError
+
+.. include it in the toctree
+.. toctree::
+   :hidden:
+
+   network/rdf_database
 
 
 Advanced network modifications

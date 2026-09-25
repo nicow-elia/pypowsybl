@@ -9,6 +9,8 @@ relying as much as possible on practical examples.
    :maxdepth: 2
 
    network
+   rdf_database
+   network_changes_export
    network_visualization
    per_unit
    loadflow

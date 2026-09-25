@@ -948,6 +948,122 @@ std::string printReport(const JavaHandle& reportNode);
 
 std::string jsonReport(const JavaHandle& reportNode);
 
+/**
+ * Network event recorder: records the changes made to a network and exports them as CGMES update documents.
+ * The handle wraps a Java NetworkEventRecording, which owns the listener and the recorded events.
+ */
+JavaHandle createNetworkEventRecorder(const JavaHandle& network);
+
+void startNetworkEventRecorder(const JavaHandle& recorder);
+
+void stopNetworkEventRecorder(const JavaHandle& recorder);
+
+void clearNetworkEventRecorder(const JavaHandle& recorder);
+
+int getNetworkEventCount(const JavaHandle& recorder);
+
+SeriesArray* createNetworkEventsSeriesArray(const JavaHandle& recorder);
+
+std::string exportNetworkEventsToPartialSsh(const JavaHandle& recorder, const std::map<std::string, std::string>& options);
+
+std::string exportNetworkEventsToCgmesDiff(const JavaHandle& recorder, const std::string& profile, const std::map<std::string, std::string>& options);
+
+std::map<std::string, std::string> exportNetworkEventsToCgmesDiffs(const JavaHandle& recorder, const std::map<std::string, std::string>& options);
+
+/**
+ * RDF database: the split CGMES loading of follow-up work package 1.
+ * CGMES files are read once into a SPARQL graph database, and a network is built from the database afterwards.
+ * The handle wraps a Java RdfDbConnection; closeRdfDbConnection releases the server connection, destroying the
+ * handle alone would only drop the reference.
+ *
+ * Every call that touches data names a scenario: the base grid model (typically a day) the graphs belong to.
+ * A snapshot of a scenario is addressed by a version label and a timestep; an empty string means "not given",
+ * which is the newest version and the base timestep respectively.
+ */
+JavaHandle createRdfDbConnection(const std::string& url, const std::map<std::string, std::string>& options);
+
+void closeRdfDbConnection(const JavaHandle& db);
+
+std::vector<std::string> getRdfDbScenarios(const JavaHandle& db);
+
+SeriesArray* getRdfDbGraphs(const JavaHandle& db, const std::string& scenario);
+
+void clearRdfDb(const JavaHandle& db, const std::string& scenario);
+
+std::vector<std::string> loadCgmesToRdfDb(const JavaHandle& db, const std::string& file, const std::string& scenario,
+                                          const std::string& version, const std::string& timestep,
+                                          const std::map<std::string, std::string>& parameters, JavaHandle* reportNode);
+
+/**
+ * Same as loadCgmesToRdfDb, but from zip archives already in memory. The buffers are raw pointers because the
+ * pybind layer owns the py::buffer objects; they only have to outlive the call.
+ */
+std::vector<std::string> loadCgmesBuffersToRdfDb(const JavaHandle& db, char** dataPtrs, int* dataSizes, int bufferCount,
+                                                 const std::string& scenario, const std::string& version,
+                                                 const std::string& timestep,
+                                                 const std::map<std::string, std::string>& parameters,
+                                                 JavaHandle* reportNode);
+
+JavaHandle loadNetworkFromRdfDb(const JavaHandle& db, const std::string& scenario, const std::string& version,
+                                const std::string& timestep, const std::map<std::string, std::string>& parameters,
+                                const std::vector<std::string>& postProcessors, JavaHandle* reportNode,
+                                bool allowVariantMultiThreadAccess);
+
+/**
+ * Bring a network to a snapshot. The returned handle wraps an update outcome, which is read with
+ * getRdfDbUpdateInfo and, on the full route only, getRdfDbUpdateNetwork.
+ */
+JavaHandle updateNetworkFromRdfDb(const JavaHandle& network, const JavaHandle& db, const std::string& scenario,
+                                  const std::string& version, const std::string& timestep,
+                                  const std::vector<std::string>& subsets,
+                                  const std::map<std::string, std::string>& options,
+                                  const std::map<std::string, std::string>& parameters, JavaHandle* reportNode);
+
+std::map<std::string, std::string> getRdfDbUpdateInfo(const JavaHandle& outcome);
+
+JavaHandle getRdfDbUpdateNetwork(const JavaHandle& outcome);
+
+SeriesArray* getRdfDbScenarioTable(const JavaHandle& db);
+
+SeriesArray* getRdfDbSnapshots(const JavaHandle& db, const std::string& scenario);
+
+SeriesArray* getRdfDbVersions(const JavaHandle& db, const std::string& scenario, const std::string& timestep);
+
+SeriesArray* getRdfDbTimesteps(const JavaHandle& db, const std::string& scenario);
+
+SeriesArray* getRdfDbModels(const JavaHandle& db, const std::string& scenario);
+
+bool isRdfDbVersioned(const JavaHandle& db, const std::string& scenario);
+
+std::string createRdfDbCheckpoint(const JavaHandle& db, const std::string& scenario, const std::string& version,
+                                  const std::string& timestep);
+
+std::vector<std::string> exportNetworkEventsToRdfDb(const JavaHandle& recorder, const JavaHandle& db,
+                                                    const std::string& scenario, const std::string& version,
+                                                    const std::string& timestep,
+                                                    const std::map<std::string, std::string>& options);
+
+std::map<std::string, std::string> getNetworkRdfDbIdentity(const JavaHandle& network, JavaHandle* db,
+                                                           const std::string& scenario, const std::string& variant);
+
+/**
+ * Snapshots as network variants (step 12). The three string vectors are parallel: one entry per requested
+ * snapshot, an empty string meaning "let the library decide" (the naming rule, the newest version, the base
+ * timestep). The returned handle wraps the network, whose variants stand for the snapshots that could be reached.
+ */
+JavaHandle loadNetworkVariantsFromRdfDb(const JavaHandle& db, const std::string& scenario,
+                                        const std::vector<std::string>& variantIds,
+                                        const std::vector<std::string>& versions,
+                                        const std::vector<std::string>& timesteps,
+                                        const std::map<std::string, std::string>& parameters,
+                                        JavaHandle* reportNode, bool allowVariantMultiThreadAccess);
+
+SeriesArray* getNetworkRdfDbVariants(const JavaHandle& network);
+
+SeriesArray* exportNetworkEventsToRdfDbPerVariant(const JavaHandle& recorder, const JavaHandle& db,
+                                                  const std::string& scenario, const std::string& version,
+                                                  const std::map<std::string, std::string>& options);
+
 JavaHandle createGLSKdocument(std::string& filename);
 
 std::vector<std::string> getGLSKinjectionkeys(pypowsybl::JavaHandle network, const JavaHandle& importer, std::string& country, long instant);

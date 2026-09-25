@@ -69,11 +69,34 @@
     <properties>
         <java.version>21</java.version>
         <powsybl-dependencies.version>2026.1.0</powsybl-dependencies.version>
+        <!--
+            diffstacking: TEMPORARY. Pins the locally built powsybl-core SNAPSHOT that carries WP1-3, which no
+            released powsybl-dependencies contains yet. Remove this property *and* the explicit powsybl-core BOM
+            import below once powsybl-dependencies ships a core release with those changes. Until then this
+            pypowsybl tree only builds against a locally installed core SNAPSHOT: Maven Central has no such
+            artifact, and snapshot-ci.yml rebuilds the powsybl-dependencies BOM instead of setting this property,
+            so the hard-coded version here would override that BOM as soon as core moves past 7.4.0-SNAPSHOT.
+        -->
+        <powsybl-core.version>7.4.0-SNAPSHOT</powsybl-core.version>
         <powsybl-open-reac.version>0.18.0</powsybl-open-reac.version>
     </properties>
 
     <dependencyManagement>
         <dependencies>
+            <!--
+                diffstacking: TEMPORARY, remove together with the powsybl-core.version property above.
+                The powsybl-core BOM is imported explicitly and *before* powsybl-dependencies, so that the SNAPSHOT
+                wins. Overriding powsybl-core.version alone is not enough: an imported BOM is interpolated with its
+                own properties, so powsybl-dependencies would still pin the released version. The first import of a
+                managed dependency wins, hence the order.
+            -->
+            <dependency>
+                <groupId>com.powsybl</groupId>
+                <artifactId>powsybl-core</artifactId>
+                <version>${powsybl-core.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
             <dependency>
                 <groupId>com.powsybl</groupId>
                 <artifactId>powsybl-dependencies</artifactId>

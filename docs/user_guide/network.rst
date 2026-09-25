@@ -119,7 +119,17 @@ For example, you can import only an EQ file from a CGMES network, and then updat
     >>> network.get_generators()["target_p"]["GEN"]
     10.0
 
-The update can also be done using binary bytes buffers, using :func:`Network.update_from_binary_buffer` or :func:`Network.update_from_binary_buffers`
+The update can also be done using binary bytes buffers, using :func:`Network.update_from_binary_buffer` or :func:`Network.update_from_binary_buffers`,
+or from a document held in a string, using :func:`Network.update_from_string`.
+
+Such a partial update is also how the changes made to a network are handed over to another system: a network can
+record its own changes and export them as a partial SSH file or as a CGMES difference model, which the other side
+applies with the methods above. See :doc:`network_changes_export`.
+
+When the file is a *partial* SSH, that is one describing only part of the model, pass the import parameter
+``{'iidm.import.cgmes.use-previous-values-during-update': 'true'}`` to any of these methods: without it the
+ordinary CGMES update resets every value the file does not mention. A CGMES difference model needs nothing of the
+sort.
 
 Reading network elements data
 -----------------------------

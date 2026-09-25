@@ -16,6 +16,7 @@ import com.powsybl.dataframe.impl.DefaultDataframeHandler;
 import com.powsybl.dataframe.impl.Series;
 import com.powsybl.flow_decomposition.FlowDecompositionResults;
 import com.powsybl.iidm.network.*;
+import com.powsybl.iidm.network.events.NetworkEvent;
 import com.powsybl.iidm.network.extensions.ConnectablePosition;
 import com.powsybl.python.commons.PyPowsyblApiHeader.ArrayPointer;
 import com.powsybl.python.commons.PyPowsyblApiHeader.SeriesPointer;
@@ -36,6 +37,7 @@ import org.apache.commons.lang3.tuple.Pair;
 import java.util.*;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
+import java.util.stream.IntStream;
 
 import static java.lang.Integer.MIN_VALUE;
 
@@ -53,6 +55,20 @@ public final class Dataframes {
             .enums("type", ParameterType.class, Parameter::getType)
             .strings("default", p -> Objects.toString(p.getDefaultValue(), ""))
             .strings("possible_values", p -> p.getPossibleValues() == null ? "" : p.getPossibleValues().toString())
+            .build();
+
+    private static final DataframeMapper<List<NetworkEvent>, Void> NETWORK_EVENTS_MAPPER = new DataframeMapperBuilder<List<NetworkEvent>, NetworkEventRow, Void>()
+            .itemsProvider(events -> IntStream.range(0, events.size())
+                    .mapToObj(i -> new NetworkEventRow(i, events.get(i)))
+                    .toList())
+            .intsIndex("index", NetworkEventRow::index)
+            .strings("type", NetworkEventRow::type)
+            .strings("id", NetworkEventRow::id)
+            .strings("extension", NetworkEventRow::extension)
+            .strings("attribute", NetworkEventRow::attribute)
+            .strings("variant", NetworkEventRow::variant)
+            .strings("old_value", NetworkEventRow::oldValue)
+            .strings("new_value", NetworkEventRow::newValue)
             .build();
 
     private static final DataframeMapper<Exporter, Void> EXPORTER_PARAMETERS_MAPPER = new DataframeMapperBuilder<Exporter, Parameter, Void>()
@@ -105,6 +121,17 @@ public final class Dataframes {
 
     public static <T> List<Series> createSeries(DataframeMapper<T, Void> mapper, T object) {
         return createSeries(mapper, object, null);
+    }
+
+    /**
+     * A mapper which maps the changes a {@link com.powsybl.python.network.NetworkEventRecording} recorded to a
+     * dataframe, one row per recorded change, in the order in which the changes were made.
+     *
+     * <p>The events are not compacted here: two changes of the same attribute are two rows, while an export keeps
+     * only the last one. The dataframe is a debugging view of a recording, not the input of an export.</p>
+     */
+    public static DataframeMapper<List<NetworkEvent>, Void> networkEventsMapper() {
+        return NETWORK_EVENTS_MAPPER;
     }
 
     /**

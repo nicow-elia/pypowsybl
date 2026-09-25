@@ -211,6 +211,15 @@
             <groupId>com.powsybl</groupId>
             <artifactId>powsybl-cgmes-extensions</artifactId>
         </dependency>
+        <!--
+        diffstacking follow-up WP1: split CGMES loading (files -> RDF database -> IIDM).
+        Compile scope: RdfDbUtil calls RdfDatabase / RdfDbConnection / RdfDbNetworkLoader directly.
+        It drags in powsybl-triple-store-impl-rdf4j-sparql (rdf4j SPARQLRepository + Graph Store Protocol client).
+        -->
+        <dependency>
+            <groupId>com.powsybl</groupId>
+            <artifactId>powsybl-cgmes-rdfdb</artifactId>
+        </dependency>
         <dependency>
             <groupId>com.powsybl</groupId>
             <artifactId>powsybl-ieee-cdf-converter</artifactId>
@@ -274,10 +283,13 @@
             <scope>runtime</scope>
         </dependency>
 
+        <!--
+            diffstacking: compile scope, not runtime: NetworkEventRecording calls PartialSshExport and
+            CgmesDiffExport directly. The artifact was already shipped, only the scope changes.
+        -->
         <dependency>
             <groupId>com.powsybl</groupId>
             <artifactId>powsybl-cgmes-conversion</artifactId>
-            <scope>runtime</scope>
         </dependency>
         <dependency>
             <groupId>com.powsybl</groupId>
@@ -399,6 +411,16 @@
         <dependency>
             <groupId>org.awaitility</groupId>
             <artifactId>awaitility</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!--
+        diffstacking follow-up WP1: an embedded Apache Jena Fuseki for the RDF database tests.
+        TEST SCOPE ONLY - Jena must never reach the native image; the Python tests start a Fuseki
+        subprocess instead (tests/fuseki_server.py). Version and exclusions come from the powsybl-core BOM.
+        -->
+        <dependency>
+            <groupId>org.apache.jena</groupId>
+            <artifactId>jena-fuseki-main</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

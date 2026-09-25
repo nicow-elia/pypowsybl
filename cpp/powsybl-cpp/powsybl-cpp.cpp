@@ -1610,6 +1610,261 @@ std::string jsonReport(const JavaHandle& reportNodeModel) {
     return toString(PowsyblCaller::get()->callJava<char*>(::jsonReport, reportNodeModel));
 }
 
+namespace {
+
+/**
+ * The keys and the values of an option map as two vectors of C strings. The vectors have to outlive the call, which
+ * is why this is an object and not a function returning the two pointers.
+ */
+class ExportOptionArgs {
+public:
+    explicit ExportOptionArgs(const std::map<std::string, std::string>& options) {
+        keys_.reserve(options.size());
+        values_.reserve(options.size());
+        for (const std::pair<const std::string, std::string>& option : options) {
+            keys_.push_back(option.first);
+            values_.push_back(option.second);
+        }
+        keysPtr_ = std::make_unique<ToCharPtrPtr>(keys_);
+        valuesPtr_ = std::make_unique<ToCharPtrPtr>(values_);
+    }
+
+    char** keys() const { return keysPtr_->get(); }
+    char** values() const { return valuesPtr_->get(); }
+    int size() const { return keys_.size(); }
+
+private:
+    std::vector<std::string> keys_;
+    std::vector<std::string> values_;
+    std::unique_ptr<ToCharPtrPtr> keysPtr_;
+    std::unique_ptr<ToCharPtrPtr> valuesPtr_;
+};
+
+}
+
+JavaHandle createNetworkEventRecorder(const JavaHandle& network) {
+    return PowsyblCaller::get()->callJava<JavaHandle>(::createNetworkEventRecorder, network);
+}
+
+void startNetworkEventRecorder(const JavaHandle& recorder) {
+    PowsyblCaller::get()->callJava<>(::startNetworkEventRecorder, recorder);
+}
+
+void stopNetworkEventRecorder(const JavaHandle& recorder) {
+    PowsyblCaller::get()->callJava<>(::stopNetworkEventRecorder, recorder);
+}
+
+void clearNetworkEventRecorder(const JavaHandle& recorder) {
+    PowsyblCaller::get()->callJava<>(::clearNetworkEventRecorder, recorder);
+}
+
+int getNetworkEventCount(const JavaHandle& recorder) {
+    return PowsyblCaller::get()->callJava<int>(::getNetworkEventCount, recorder);
+}
+
+SeriesArray* createNetworkEventsSeriesArray(const JavaHandle& recorder) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::createNetworkEventsSeriesArray, recorder));
+}
+
+std::string exportNetworkEventsToPartialSsh(const JavaHandle& recorder, const std::map<std::string, std::string>& options) {
+    ExportOptionArgs args(options);
+    return toString(PowsyblCaller::get()->callJava<char*>(::exportNetworkEventsToPartialSsh, recorder,
+                                                          args.keys(), args.size(), args.values(), args.size()));
+}
+
+std::string exportNetworkEventsToCgmesDiff(const JavaHandle& recorder, const std::string& profile, const std::map<std::string, std::string>& options) {
+    ExportOptionArgs args(options);
+    return toString(PowsyblCaller::get()->callJava<char*>(::exportNetworkEventsToCgmesDiff, recorder,
+                                                          (char*) profile.data(),
+                                                          args.keys(), args.size(), args.values(), args.size()));
+}
+
+std::map<std::string, std::string> exportNetworkEventsToCgmesDiffs(const JavaHandle& recorder, const std::map<std::string, std::string>& options) {
+    ExportOptionArgs args(options);
+    return convertMapStructToStdMap(PowsyblCaller::get()->callJava<string_map*>(::exportNetworkEventsToCgmesDiffs, recorder,
+                                                                               args.keys(), args.size(), args.values(), args.size()));
+}
+
+JavaHandle createRdfDbConnection(const std::string& url, const std::map<std::string, std::string>& options) {
+    ExportOptionArgs args(options);
+    return PowsyblCaller::get()->callJava<JavaHandle>(::createRdfDbConnection, (char*) url.data(),
+                                                      args.keys(), args.size(), args.values(), args.size());
+}
+
+void closeRdfDbConnection(const JavaHandle& db) {
+    PowsyblCaller::get()->callJava<>(::closeRdfDbConnection, db);
+}
+
+std::vector<std::string> getRdfDbScenarios(const JavaHandle& db) {
+    auto* scenariosArrayPtr = PowsyblCaller::get()->callJava<array*>(::getRdfDbScenarios, db);
+    ToStringVector scenarios(scenariosArrayPtr);
+    return scenarios.get();
+}
+
+SeriesArray* getRdfDbGraphs(const JavaHandle& db, const std::string& scenario) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbGraphs, db, (char*) scenario.data()));
+}
+
+void clearRdfDb(const JavaHandle& db, const std::string& scenario) {
+    PowsyblCaller::get()->callJava<>(::clearRdfDb, db, (char*) scenario.data());
+}
+
+std::vector<std::string> loadCgmesToRdfDb(const JavaHandle& db, const std::string& file, const std::string& scenario,
+                                          const std::string& version, const std::string& timestep,
+                                          const std::map<std::string, std::string>& parameters, JavaHandle* reportNode) {
+    ExportOptionArgs args(parameters);
+    auto* graphsArrayPtr = PowsyblCaller::get()->callJava<array*>(::loadCgmesToRdfDb, db, (char*) file.data(),
+                                                                  (char*) scenario.data(), (char*) version.data(),
+                                                                  (char*) timestep.data(),
+                                                                  args.keys(), args.size(), args.values(), args.size(),
+                                                                  (reportNode == nullptr) ? nullptr : *reportNode);
+    ToStringVector graphs(graphsArrayPtr);
+    return graphs.get();
+}
+
+std::vector<std::string> loadCgmesBuffersToRdfDb(const JavaHandle& db, char** dataPtrs, int* dataSizes, int bufferCount,
+                                                 const std::string& scenario, const std::string& version,
+                                                 const std::string& timestep,
+                                                 const std::map<std::string, std::string>& parameters,
+                                                 JavaHandle* reportNode) {
+    ExportOptionArgs args(parameters);
+    auto* graphsArrayPtr = PowsyblCaller::get()->callJava<array*>(::loadCgmesBuffersToRdfDb, db, dataPtrs, dataSizes,
+                                                                  bufferCount, (char*) scenario.data(),
+                                                                  (char*) version.data(), (char*) timestep.data(),
+                                                                  args.keys(), args.size(), args.values(), args.size(),
+                                                                  (reportNode == nullptr) ? nullptr : *reportNode);
+    ToStringVector graphs(graphsArrayPtr);
+    return graphs.get();
+}
+
+JavaHandle loadNetworkFromRdfDb(const JavaHandle& db, const std::string& scenario, const std::string& version,
+                                const std::string& timestep, const std::map<std::string, std::string>& parameters,
+                                const std::vector<std::string>& postProcessors, JavaHandle* reportNode,
+                                bool allowVariantMultiThreadAccess) {
+    ExportOptionArgs args(parameters);
+    ToCharPtrPtr postProcessorsPtr(postProcessors);
+    return PowsyblCaller::get()->callJava<JavaHandle>(::loadNetworkFromRdfDb, db, (char*) scenario.data(),
+                                                      (char*) version.data(), (char*) timestep.data(),
+                                                      args.keys(), args.size(), args.values(), args.size(),
+                                                      postProcessorsPtr.get(), postProcessors.size(),
+                                                      (reportNode == nullptr) ? nullptr : *reportNode,
+                                                      allowVariantMultiThreadAccess);
+}
+
+JavaHandle updateNetworkFromRdfDb(const JavaHandle& network, const JavaHandle& db, const std::string& scenario,
+                                  const std::string& version, const std::string& timestep,
+                                  const std::vector<std::string>& subsets,
+                                  const std::map<std::string, std::string>& options,
+                                  const std::map<std::string, std::string>& parameters, JavaHandle* reportNode) {
+    ExportOptionArgs optionArgs(options);
+    ExportOptionArgs args(parameters);
+    ToCharPtrPtr subsetsPtr(subsets);
+    return PowsyblCaller::get()->callJava<JavaHandle>(::updateNetworkFromRdfDb, network, db,
+                                                      (char*) scenario.data(), (char*) version.data(),
+                                                      (char*) timestep.data(),
+                                                      subsetsPtr.get(), subsets.size(),
+                                                      optionArgs.keys(), optionArgs.size(),
+                                                      optionArgs.values(), optionArgs.size(),
+                                                      args.keys(), args.size(), args.values(), args.size(),
+                                                      (reportNode == nullptr) ? nullptr : *reportNode);
+}
+
+std::map<std::string, std::string> getRdfDbUpdateInfo(const JavaHandle& outcome) {
+    string_map* info = PowsyblCaller::get()->callJava<string_map*>(::getRdfDbUpdateInfo, outcome);
+    return convertMapStructToStdMap(info);
+}
+
+JavaHandle getRdfDbUpdateNetwork(const JavaHandle& outcome) {
+    return PowsyblCaller::get()->callJava<JavaHandle>(::getRdfDbUpdateNetwork, outcome);
+}
+
+SeriesArray* getRdfDbScenarioTable(const JavaHandle& db) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbScenarioTable, db));
+}
+
+SeriesArray* getRdfDbSnapshots(const JavaHandle& db, const std::string& scenario) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbSnapshots, db, (char*) scenario.data()));
+}
+
+SeriesArray* getRdfDbVersions(const JavaHandle& db, const std::string& scenario, const std::string& timestep) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbVersions, db, (char*) scenario.data(),
+                                                                  (char*) timestep.data()));
+}
+
+SeriesArray* getRdfDbTimesteps(const JavaHandle& db, const std::string& scenario) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbTimesteps, db, (char*) scenario.data()));
+}
+
+SeriesArray* getRdfDbModels(const JavaHandle& db, const std::string& scenario) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbModels, db, (char*) scenario.data()));
+}
+
+bool isRdfDbVersioned(const JavaHandle& db, const std::string& scenario) {
+    return PowsyblCaller::get()->callJava<bool>(::isRdfDbVersioned, db, (char*) scenario.data());
+}
+
+std::string createRdfDbCheckpoint(const JavaHandle& db, const std::string& scenario, const std::string& version,
+                                  const std::string& timestep) {
+    return toString(PowsyblCaller::get()->callJava<char*>(::createRdfDbCheckpoint, db, (char*) scenario.data(),
+                                                          (char*) version.data(), (char*) timestep.data()));
+}
+
+std::vector<std::string> exportNetworkEventsToRdfDb(const JavaHandle& recorder, const JavaHandle& db,
+                                                    const std::string& scenario, const std::string& version,
+                                                    const std::string& timestep,
+                                                    const std::map<std::string, std::string>& options) {
+    ExportOptionArgs args(options);
+    auto* idsArrayPtr = PowsyblCaller::get()->callJava<array*>(::exportNetworkEventsToRdfDb, recorder, db,
+                                                               (char*) scenario.data(), (char*) version.data(),
+                                                               (char*) timestep.data(),
+                                                               args.keys(), args.size(), args.values(), args.size());
+    ToStringVector ids(idsArrayPtr);
+    return ids.get();
+}
+
+std::map<std::string, std::string> getNetworkRdfDbIdentity(const JavaHandle& network, JavaHandle* db,
+                                                           const std::string& scenario, const std::string& variant) {
+    string_map* identity = PowsyblCaller::get()->callJava<string_map*>(::getNetworkRdfDbIdentity, network,
+                                                                       (db == nullptr) ? nullptr : *db,
+                                                                       (char*) scenario.data(),
+                                                                       (char*) variant.data());
+    return convertMapStructToStdMap(identity);
+}
+
+JavaHandle loadNetworkVariantsFromRdfDb(const JavaHandle& db, const std::string& scenario,
+                                        const std::vector<std::string>& variantIds,
+                                        const std::vector<std::string>& versions,
+                                        const std::vector<std::string>& timesteps,
+                                        const std::map<std::string, std::string>& parameters,
+                                        JavaHandle* reportNode, bool allowVariantMultiThreadAccess) {
+    ExportOptionArgs args(parameters);
+    ToCharPtrPtr variantIdsPtr(variantIds);
+    ToCharPtrPtr versionsPtr(versions);
+    ToCharPtrPtr timestepsPtr(timesteps);
+    return PowsyblCaller::get()->callJava<JavaHandle>(::loadNetworkVariantsFromRdfDb, db, (char*) scenario.data(),
+                                                      variantIdsPtr.get(), variantIds.size(),
+                                                      versionsPtr.get(), versions.size(),
+                                                      timestepsPtr.get(), timesteps.size(),
+                                                      args.keys(), args.size(), args.values(), args.size(),
+                                                      (reportNode == nullptr) ? nullptr : *reportNode,
+                                                      allowVariantMultiThreadAccess);
+}
+
+SeriesArray* getNetworkRdfDbVariants(const JavaHandle& network) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getNetworkRdfDbVariants, network));
+}
+
+SeriesArray* exportNetworkEventsToRdfDbPerVariant(const JavaHandle& recorder, const JavaHandle& db,
+                                                  const std::string& scenario, const std::string& version,
+                                                  const std::map<std::string, std::string>& options) {
+    ExportOptionArgs args(options);
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::exportNetworkEventsToRdfDbPerVariant, recorder,
+                                                                  db, (char*) scenario.data(),
+                                                                  (char*) version.data(),
+                                                                  args.keys(), args.size(), args.values(),
+                                                                  args.size()));
+}
+
 JavaHandle createFlowDecomposition() {
     return PowsyblCaller::get()->callJava<JavaHandle>(::createFlowDecomposition);
 }

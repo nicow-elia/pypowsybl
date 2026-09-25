@@ -364,7 +364,8 @@ public final class NetworkCFunctions {
         });
     }
 
-    private static MultipleReadOnlyDataSource createDataSourceFromBuffers(CCharPointerPointer data, CIntPointer dataSizes, int bufferCount) {
+    // diffstacking: package private so that RdfDbCFunctions can upload the very same zip buffers into a database
+    static MultipleReadOnlyDataSource createDataSourceFromBuffers(CCharPointerPointer data, CIntPointer dataSizes, int bufferCount) {
         List<Integer> bufferSizes = CTypeUtil.toIntegerList(dataSizes, bufferCount);
         List<ReadOnlyDataSource> dataSourceList = new ArrayList<>();
         for (int i = 0; i < bufferCount; ++i) {

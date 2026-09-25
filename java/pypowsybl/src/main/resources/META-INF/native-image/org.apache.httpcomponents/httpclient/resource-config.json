@@ -1,0 +1,7 @@
+{
+  "resources":{
+  "includes":[
+    {"pattern":"\\Qmozilla/public-suffix-list.txt\\E"},
+    {"pattern":"\\Qorg/apache/http/client/version.properties\\E"}
+  ]}
+}

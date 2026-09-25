@@ -9,6 +9,7 @@ from __future__ import annotations  # Necessary for type alias like _DataFrame t
 
 import io
 import sys
+import zipfile
 
 import datetime
 from datetime import timezone
@@ -21,7 +22,7 @@ from typing import (
     Dict,
     Optional,
     Union,
-    Any, Type, Literal
+    Any, Type, Literal, TYPE_CHECKING
 )
 
 from numpy import inf
@@ -41,14 +42,26 @@ from pypowsybl.utils import (
 )
 from pypowsybl.report import ReportNode
 from .bus_breaker_topology import BusBreakerTopology
+from .network_event_recorder import NetworkEventRecorder
 from .node_breaker_topology import NodeBreakerTopology
 from .sld_parameters import SldParameters
 from .nad_parameters import NadParameters
 from .edge_info_parameters import EdgeInfoParameters
 from .nad_profile import NadProfile
+from .rdf_db import (
+    RdfDbVariantRefusedError,
+    Timestep,
+    _check_scenario,
+    _split_reasons,
+    _timestep_to_str,
+    _version_to_str,
+)
 from .sld_profile import SldProfile
 from .svg import Svg
 from .util import create_data_frame_from_series_array, ParamsDict
+
+if TYPE_CHECKING:
+    from .rdf_db import RdfDatabase
 
 
 class WorkingVariantScope:
@@ -218,6 +231,247 @@ class Network:  # pylint: disable=too-many-public-methods
         _pp.update_network_from_binary_buffers(self._handle, buffer_list, {} if parameters is None else parameters,
                                          [] if post_processors is None else post_processors,
                                          None if report_node is None else report_node._report_node)
+
+    def update_from_string(self, content: str, file_name: str = 'update_SSH.xml',
+                           parameters: Optional[Dict[str, str]] = None, post_processors: Optional[List[str]] = None,
+                           report_node: Optional[ReportNode] = None) -> None:
+        """
+        Update the network from an XML document held in a string, e.g. a partial SSH or a CGMES difference model
+        produced by :class:`NetworkEventRecorder`.
+
+        Args:
+           content:    the XML document
+           file_name:  the name the document gets inside the in-memory archive; CGMES recognises the profile of a
+                       partial SSH from the name (it must contain ``_SSH``)
+           parameters:  A dictionary of import parameters. A partial SSH is still an SSH file, so the receiver has
+                       to be told to keep the values the file does not mention, with
+                       ``{'iidm.import.cgmes.use-previous-values-during-update': 'true'}``; otherwise the ordinary
+                       CGMES update resets them. A difference model needs nothing of the sort.
+           post_processors: a list of import post processors (will be added to the ones defined by the platform config)
+           report_node: the reporter to be used to create an execution report, default is None (no report)
+        """
+        buffer = io.BytesIO()
+        # the update path only accepts zip archives; ZIP_STORED because compressing an in-memory document is
+        # a pure cost on this path
+        with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as archive:
+            archive.writestr(file_name, content.encode('utf-8'))
+        buffer.seek(0)
+        self.update_from_binary_buffers([buffer], parameters, post_processors, report_node)
+
+    def update_from_rdf_db(self, db: 'RdfDatabase', scenario: str, version: Optional[str] = None,
+                           timestep: 'Timestep' = None, *, variant: Optional[str] = None,
+                           subsets: Optional[List[str]] = None,
+                           parameters: Optional[Dict[str, str]] = None,
+                           report_node: Optional[ReportNode] = None, max_diff_chain: int = 200) -> str:
+        """
+        Bring this network to a snapshot of an RDF database, whichever way is cheapest.
+
+        One query decides how. The network is **already** at the target and nothing happens (``'noop'``); or the
+        target is reachable by applying stored differences - forwards, backwards, or up one branch of the version
+        chain and down another - which are fetched in one request and applied in place (``'diff'``); or it is not,
+        and the network is rebuilt from the database (``'full'``). A target in *another scenario* is always a
+        rebuild, decided without a query, because differences never cross scenarios.
+
+        With ``variant=`` the routes describe the **difference**, not whether anything happened: a ``'noop'``
+        still creates the variant when it did not exist, by cloning one that already stands for the target. Ask
+        :meth:`variants_binding` or :meth:`Network.get_variant_ids` rather than the route to learn what is there.
+
+        **What a full reload means for this Python object.** The object stays valid and keeps its ``id``, its
+        per-unit setting and its threading mode, but it now wraps a *new* Java network:
+
+        * variants are **not** carried over - the reloaded network has only the initial variant;
+        * :class:`Network` objects obtained from :meth:`get_sub_network` before the reload still point at the old
+          Java network;
+        * :class:`NetworkEventRecorder`\\ s created before the reload are bound to the old Java network, so every
+          export of such a recorder raises :class:`pypowsybl.PyPowsyblError`; create a new recorder. Their
+          :meth:`NetworkEventRecorder.stop` still works, so nothing leaks;
+        * dataframes taken before the reload are plain data and are unaffected.
+
+        Args:
+           db:             an open connection, see :func:`pypowsybl.network.connect_rdf_db`
+           scenario:       the base scenario (grid model / day) to bring the network to, for instance
+                           ``"2021-02-09"``; required, never guessed
+           version:        the snapshot version label, ``None`` for the newest one
+           timestep:       the moment of the scenario's day, see :data:`pypowsybl.network.Timestep`; ``None`` is the
+                           base timestep
+           variant:        create or update **one variant** so that it stands for the snapshot, leaving every other
+                           variant of the network - and the working variant of the caller - exactly as it is. A
+                           variant that does not exist is created by cloning the one nearest to the target; a
+                           variant that exists is moved from wherever it stands. Naming a variant switches the
+                           network into variant mode, which is sticky - it stays on after a refusal and after
+                           every variant has been removed again: from then on every update of this module is a
+                           variant operation, and anything that would write state shared by all variants is
+                           refused with :class:`pypowsybl.network.RdfDbVariantRefusedError` instead of reloading
+                           the network. :meth:`NetworkEventRecorder.to_rdf_updates` with ``variant=`` or
+                           ``per_variant=True`` switches it on in the same way. Cloning a variant yourself does
+                           **not**; and while the network is *not* in variant mode, a classic call like this one
+                           forgets what the variants you cloned stood for (see :meth:`variants_binding`)
+           subsets:        the legacy profile-replacement flow of the un-versioned scenarios: the CGMES subsets to
+                           read (``'SSH'``, ``'SV'``, ...), applied in place. It returns ``'update'`` and may not be
+                           combined with a ``version`` or a ``timestep``
+           parameters:     a dictionary of CGMES import parameters
+           report_node:    the reporter to be used to create an execution report, default is None (no report)
+           max_diff_chain: how many stored differences the fast route may apply before a rebuild is cheaper
+                           (default 200)
+
+        Returns:
+            ``'noop'``, ``'diff'`` or ``'full'``. There is a fourth answer, ``'update'``, and it means "no snapshot
+            was addressed": it comes back from the legacy ``subsets`` flow, and from an **un-versioned scenario**
+            named without a version and a timestep, where the only thing that can happen is that the profiles are
+            replaced from the graphs that are stored there.
+
+        Raises:
+            ValueError: ``max_diff_chain`` is smaller than 1, or ``subsets`` is combined with a version, a
+                timestep or a variant
+            pypowsybl.network.RdfDbVariantRefusedError: the snapshot cannot be reached inside a variant; the
+                network and all of its variants are exactly as they were
+            pypowsybl.PyPowsyblError: the scenario or the snapshot does not exist, or the database cannot be reached
+
+        Examples:
+            .. code-block:: python
+
+                network.update_from_rdf_db(db, '2021-02-09', '1.3', '8:30')
+                network.update_from_rdf_db(db, '2021-02-09', '1.3', '9:00', variant='9:00')
+        """
+        _check_scenario(scenario)
+        if max_diff_chain < 1:
+            raise ValueError(f'max_diff_chain is at least 1, got {max_diff_chain}')
+        if subsets and (version is not None or timestep is not None or variant is not None):
+            raise ValueError('subsets= is the legacy profile replacement of an un-versioned scenario and addresses '
+                             'no snapshot; it cannot be combined with a version, a timestep or a variant')
+        options = {'max_diff_chain': str(max_diff_chain)}
+        if variant is not None:
+            if not isinstance(variant, str) or not variant.strip():
+                raise ValueError(f'A variant identifier must be a non-blank string, got {variant!r}')
+            options['variant'] = variant
+        outcome = _pp.update_network_from_rdf_db(self._handle, db._check_open(),  # pylint: disable=protected-access
+                                                 scenario, _version_to_str(version), _timestep_to_str(timestep),
+                                                 [] if subsets is None else subsets, options,
+                                                 {} if parameters is None else parameters,
+                                                 None if report_node is None else report_node._report_node)  # pylint: disable=protected-access
+        info = _pp.get_rdf_db_update_info(outcome)
+        route = info['route']
+        answered_variant = info.get('variant') or None
+        if route == 'refused':
+            reasons = _split_reasons(info.get('reasons'))
+            raise RdfDbVariantRefusedError(
+                f"the snapshot cannot be reached inside variant '{answered_variant}' and nothing was changed: "
+                f'{"; ".join(reasons)}',
+                variant=answered_variant, reasons=reasons)
+        if route == 'full':
+            if variant is not None or answered_variant is not None:
+                # The handle swap replaces the Java network and would silently drop every bound variant. Core never
+                # takes the full route in variant mode unless a fallback this binding does not set is chosen, so
+                # this is a guard against a future core change, not a reachable branch
+                raise RuntimeError('a variant update answered with a full reload, which would drop the variants '
+                                   'of this network; this is a bug in the binding layer, please report it')
+            self._replace_handle(_pp.get_rdf_db_update_network(outcome))
+        return route
+
+    def rdf_db_identity(self, db: Optional['RdfDatabase'] = None, scenario: Optional[str] = None,
+                        variant: Optional[str] = None) -> Dict[str, str]:
+        """
+        Where this network, or one of its variants, stands in an RDF database.
+
+        Without ``db`` the answer comes from the network itself: the provenance a database load, update or export
+        left on it, plus the CGMES model identifiers of its metadata. With ``db`` the snapshot is additionally
+        looked up in the database, which also works for a network that was loaded from files whose models are
+        stored there.
+
+        Args:
+            db:       an open connection, or ``None`` to read the network only
+            scenario: the scenario to resolve the network in; required when ``db`` is given
+            variant:  the variant to describe, ``None`` for the network itself. The network-level identity always
+                      describes the primary variant (``'InitialState'``); a bound variant's own identity is
+                      swapped in for the duration of the read
+
+        Returns:
+            a dictionary that may hold ``scenario``, ``snapshot`` (the snapshot IRI), ``version``, ``timestep``,
+            ``label`` and one entry per CGMES profile (``'EQ'``, ``'SSH'``, ...) naming the model it is at. Empty
+            when the network has no CGMES identity at all.
+
+        Raises:
+            ValueError: ``db`` was given without a ``scenario``
+            pypowsybl.PyPowsyblError: the network has no such variant, or that variant stands for no snapshot
+        """
+        if variant is not None and (not isinstance(variant, str) or not variant.strip()):
+            raise ValueError(f'A variant identifier must be a non-blank string, got {variant!r}')
+        variant_id = '' if variant is None else variant
+        if db is None:
+            return _pp.get_network_rdf_db_identity(self._handle, None, '', variant_id)
+        if scenario is None:
+            raise ValueError('a scenario is required to resolve a network in a database: '
+                             'rdf_db_identity(db, "2021-02-09")')
+        return _pp.get_network_rdf_db_identity(self._handle, db._check_open(),  # pylint: disable=protected-access
+                                               _check_scenario(scenario), variant_id)
+
+    def variants_binding(self) -> DataFrame:
+        """
+        What every variant of this network stands for in an RDF database.
+
+        Returns:
+            a dataframe indexed by ``variant`` with the columns ``scenario``, ``snapshot`` (the snapshot IRI),
+            ``version``, ``timestep`` (ISO instant), ``label`` (``HH:MM``), ``cloned_from``, ``eq`` and ``ssh``
+            (the stored model the variant is at), ``case_date``, ``status`` and ``reasons``.
+
+            ``status`` is ``primary`` for the network's own identity (``'InitialState'``), ``bound`` for a variant
+            that stands for a snapshot - including one you cloned yourself, which inherits the binding of its
+            source because its state *is* that snapshot -, ``unbound`` for a variant that stands for none, and
+            ``refused`` for a snapshot the last load or update could not reach; a ``refused`` row is not a variant
+            of the network, it is where the reasons survive.
+
+            The index is always unique. A refusal that named a variant which *exists* - one that was asked to move
+            and stayed where it was - puts its reasons on that variant's own row instead of adding a second one,
+            so ``status`` keeps saying what the variant still stands for and ``reasons`` says why it did not move.
+            A ``refused`` row has an empty ``label``: nothing was bound, so there is no case date to read the
+            scenario's offset from.
+
+            A variant you cloned is only tracked **until the next classic operation**: as long as the network is
+            not in variant mode, :meth:`update_from_rdf_db` without a ``variant``, the profile replacement and the
+            classic exports forget those rows, because they may have written into every variant at once and the
+            library will not claim a clone still stands for a snapshot it can no longer vouch for. Opting in on
+            such a variant afterwards is a clear error rather than a silent plan. The ``primary`` row is never
+            dropped, and in variant mode nothing is. Overwriting the primary variant from a bound one moves the
+            network-level identity with the state, so the network is then at *that* variant's snapshot.
+
+        Examples:
+            .. code-block:: python
+
+                day = pp.network.from_rdf_db(db, '2021-02-09', '1.1', timesteps=['8:00', '8:15'])
+                day.variants_binding()[['timestep', 'status']]
+        """
+        return create_data_frame_from_series_array(_pp.get_network_rdf_db_variants(self._handle))
+
+    def _replace_handle(self, handle: _pp.JavaHandle) -> None:
+        """
+        Point this object at another Java network, as the full route of :meth:`update_from_rdf_db` does.
+
+        The old handle is released when its last Python reference dies; the Java network behind it stays alive as
+        long as something else - a recorder, a sub-network object - still holds it. ``_per_unit`` and
+        ``_nominal_apparent_power`` are properties of this Python object and survive the swap; the threading mode is
+        a property of the Java network, and the binding layer copies it from the one that was replaced.
+        """
+        self._handle = handle
+        self.__init_from_handle()
+
+    def event_recorder(self) -> NetworkEventRecorder:
+        """
+        Create a recorder of the changes made to this network, to export them as CGMES update documents.
+
+        The returned recorder is not recording yet; use it as a context manager, or call
+        :meth:`NetworkEventRecorder.start`.
+
+        Returns:
+            a new :class:`NetworkEventRecorder` of this network.
+
+        Examples:
+            .. code-block:: python
+
+                with network.event_recorder() as recorder:
+                    network.update_loads(id='LOAD', p0=10.0)
+                ssh = recorder.to_ssh()
+        """
+        return NetworkEventRecorder(self)
 
     def open_switch(self, id: str) -> bool:
         return _pp.update_switch_position(self._handle, id, True)
