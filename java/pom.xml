@@ -67,7 +67,7 @@
     </developers>
 
     <properties>
-        <java.version>21</java.version>
+        <java.version>25</java.version>
         <powsybl-dependencies.version>2026.1.0</powsybl-dependencies.version>
         <!--
             diffstacking: TEMPORARY. Pins the locally built powsybl-core SNAPSHOT that carries WP1-3, which no
