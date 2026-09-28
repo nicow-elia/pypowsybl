@@ -97,8 +97,9 @@ name.
 Exporting a difference model
 ----------------------------
 
-:meth:`NetworkEventRecorder.to_cgmes_diff` writes one ``dm:DifferenceModel`` document of one profile. It is applied
-exactly like the partial SSH, under a name ending in ``_SSH_DIFF.xml``:
+:meth:`NetworkEventRecorder.to_cgmes_diff` writes one ``dm:DifferenceModel`` document of one profile (a zip archive
+of one document per profile when the changes touch several, see below). It is applied exactly like the partial SSH,
+under a name ending in ``_SSH_DIFF.xml``:
 
 .. testcode::
 
@@ -154,6 +155,7 @@ Writing the same thing to files:
 
     import tempfile
     import pathlib
+    import zipfile
 
     with tempfile.TemporaryDirectory() as directory:
         recorder.to_cgmes_diffs(pathlib.Path(directory) / 'out')          # one file per profile in a directory
@@ -164,6 +166,41 @@ Writing the same thing to files:
 .. testoutput::
 
     ['update_SSH_DIFF.xml']
+
+One file per difference: XML for one profile, a zip archive for several
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+A difference model document describes one profile, so :meth:`NetworkEventRecorder.to_cgmes_diff` writes **one XML
+document** when the changes touch one profile (or ``profile=`` selects one), and **one zip archive** holding a
+``<stem>_<PROFILE>_DIFF.xml`` per profile when they touch several. A path ending in ``.zip`` always gets a zip
+archive, also for a single profile, so a caller who always writes ``.zip`` always gets the same shape. With several
+profiles, any other path gets its extension replaced by ``.zip`` (a ``UserWarning`` names the file written, which is
+also the return value), a binary file object receives the archive, and a text file object or ``None`` raise, because
+an archive cannot go there - :meth:`NetworkEventRecorder.to_cgmes_diffs` returns the documents as a dict instead.
+
+:meth:`Network.update_from_file` reads what it is given and nothing else: a **zip archive** (recognised by its
+content, whatever its name) is read as a whole, several models of one profile inside it being applied one after the
+other along their ``Supersedes`` chain (not as one transaction: a step that cannot be applied leaves the steps before
+it applied); a single **difference model file** (recognised by its content, so
+``update.diff`` works too) is read **alone**, even when files with the same name prefix lie next to it. Only other
+files, such as a full or partial ``_SSH.xml``, keep the CGMES convention of reading the same-prefix files of their
+folder.
+
+.. testcode::
+
+    with tempfile.TemporaryDirectory() as directory:
+        archive = recorder.to_cgmes_diff(pathlib.Path(directory) / 'change.zip')
+        with zipfile.ZipFile(archive) as entries:
+            print(archive.name, entries.namelist())
+
+        zip_receiver = pp.network.load(DATA_DIR / 'CGMES_Full.zip')
+        zip_receiver.update_from_file(archive)
+        print(zip_receiver.get_loads().loc[load_id]['p0'])
+
+.. testoutput::
+
+    change.zip ['change_SSH_DIFF.xml']
+    11.0
 
 Equipment changes: operational limits, voltage limits and impedances
 --------------------------------------------------------------------

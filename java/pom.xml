@@ -70,8 +70,9 @@
         <java.version>21</java.version>
         <powsybl-dependencies.version>2026.1.0</powsybl-dependencies.version>
         <!--
-            diffstacking: TEMPORARY. Pins the locally built powsybl-core SNAPSHOT that carries WP1-3, which no
-            released powsybl-dependencies contains yet. Remove this property *and* the explicit powsybl-core BOM
+            diffstacking: TEMPORARY. Pins the locally built powsybl-core SNAPSHOT that carries the diffstacking work
+            (cgmes-rdfdb module, difference model import/export, partial SSH), which no released
+            powsybl-dependencies contains yet. Remove this property *and* the explicit powsybl-core BOM
             import below once powsybl-dependencies ships a core release with those changes. Until then this
             pypowsybl tree only builds against a locally installed core SNAPSHOT: Maven Central has no such
             artifact, and snapshot-ci.yml rebuilds the powsybl-dependencies BOM instead of setting this property,

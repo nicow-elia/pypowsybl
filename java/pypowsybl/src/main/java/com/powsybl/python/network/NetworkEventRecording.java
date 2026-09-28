@@ -32,6 +32,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.stream.Stream;
 
@@ -55,8 +56,8 @@ import java.util.stream.Stream;
  * was not imported from CGMES. Those writes are themselves network changes, so an export running while the listener
  * is attached would record property updates that the <em>next</em> export would then reject as unsupported. Every
  * export therefore detaches the listener, works on an immutable snapshot of the events taken before that, and
- * re-attaches it afterwards if it was attached. The tender usage pattern exports inside the recorded block, so this
- * is the normal case, not an edge case.</p>
+ * re-attaches it afterwards if it was attached. The usual pattern exports inside the recorded block, so this is the
+ * normal case, not an edge case.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -165,38 +166,33 @@ public final class NetworkEventRecording {
      *                          behavior is {@code raise}
      */
     public String toPartialSsh(Map<String, String> options) {
-        Map<String, String> rest = new LinkedHashMap<>(options);
-        String variant = effectiveVariant(variantOf(rest));
-        PartialSshExport.ExportOptions exportOptions = partialSshOptions(rest);
-        if (variant != null) {
-            exportOptions.setVariant(variant);
-            exportOptions.setRejectSharedChanges(hasSeveralVariants());
-        }
-        return exportWithSnapshot(events -> RdfDbProvenance.inVariant(network, variant, () -> {
+        Request request = request(options);
+        PartialSshExport.ExportOptions exportOptions = partialSshOptions(request.rest());
+        selectVariant(request.variant(), exportOptions::setVariant, exportOptions::setRejectSharedChanges);
+        return exportIn(request.variant(), events -> {
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
             PartialSshExport.write(network, events, outputStream, exportOptions);
             return outputStream.toString(StandardCharsets.UTF_8);
-        }));
+        });
     }
 
     /**
      * Export the recorded changes as a single CGMES difference model document.
      *
-     * @param profileOrNull the profile to write ({@code EQ} or {@code SSH}, case insensitive), or {@code null} to let
-     *                      the changes decide, which then have to touch at most one profile
+     * @param profileOrNull the profile to write ({@code EQ} or {@code SSH}, case insensitive), or {@code null} (or
+     *                      empty) to let the changes decide, which then have to touch at most one profile
      * @param options       the flat option map, see the option key constants of this class
      * @return the XML document, which is a well formed empty difference model when nothing was recorded
      */
     public String toCgmesDiff(String profileOrNull, Map<String, String> options) {
-        CgmesSubset subset = profileOrNull == null ? null : parseProfile(profileOrNull);
-        Map<String, String> rest = new LinkedHashMap<>(options);
-        String variant = effectiveVariant(variantOf(rest));
-        CgmesDiffExport.ExportOptions exportOptions = withVariant(diffOptions(rest), variant);
-        return exportWithSnapshot(events -> RdfDbProvenance.inVariant(network, variant, () -> {
+        CgmesSubset subset = profileOrNull == null || profileOrNull.isEmpty() ? null : parseProfile(profileOrNull);
+        Request request = request(options);
+        CgmesDiffExport.ExportOptions exportOptions = diffOptions(request.rest(), request.variant());
+        return exportIn(request.variant(), events -> {
             ByteArrayOutputStream outputStream = new ByteArrayOutputStream();
             CgmesDiffExport.write(network, events, outputStream, subset, exportOptions);
             return outputStream.toString(StandardCharsets.UTF_8);
-        }));
+        });
     }
 
     /**
@@ -211,17 +207,16 @@ public final class NetworkEventRecording {
      *         was recorded
      */
     public Map<String, String> toCgmesDiffs(Map<String, String> options) {
-        Map<String, String> rest = new LinkedHashMap<>(options);
-        String variant = effectiveVariant(variantOf(rest));
-        CgmesDiffExport.ExportOptions exportOptions = withVariant(diffOptions(rest), variant);
-        return exportWithSnapshot(events -> RdfDbProvenance.inVariant(network, variant, () -> {
+        Request request = request(options);
+        CgmesDiffExport.ExportOptions exportOptions = diffOptions(request.rest(), request.variant());
+        return exportIn(request.variant(), events -> {
             CgmesDiffExport.Result result = CgmesDiffExport.toDifferences(network, events, exportOptions);
             Map<String, String> documents = new LinkedHashMap<>();
             for (Map.Entry<CgmesSubset, DifferenceModel> entry : result.differences().models().entrySet()) {
                 documents.put(entry.getKey().getIdentifier(), DifferenceModelWriter.toString(entry.getValue()));
             }
             return documents;
-        }));
+        });
     }
 
     /**
@@ -276,22 +271,43 @@ public final class NetworkEventRecording {
     }
 
     /**
-     * Select a variant on difference model export options.
+     * The options of one file export, with the variant it describes taken out.
+     *
+     * @param rest    the options left for the option parser
+     * @param variant the variant the export describes, see {@link #effectiveVariant}, or {@code null}
+     */
+    private record Request(Map<String, String> rest, String variant) {
+    }
+
+    private Request request(Map<String, String> options) {
+        Map<String, String> rest = new LinkedHashMap<>(options);
+        return new Request(rest, effectiveVariant(variantOf(rest)));
+    }
+
+    /** The difference model options of a file export, with the variant it describes selected. */
+    private CgmesDiffExport.ExportOptions diffOptions(Map<String, String> options, String variant) {
+        CgmesDiffExport.ExportOptions exportOptions = diffOptions(options);
+        selectVariant(variant, exportOptions::setVariant, exportOptions::setRejectSharedChanges);
+        return exportOptions;
+    }
+
+    /**
+     * Select a variant on export options; the two option types of core share no interface, hence the setters.
      *
      * <p>With more than one variant in the network a change IIDM does not store per variant belongs to all of them
      * and therefore to none of their snapshots, so it is refused rather than written into the one the caller
      * selected.</p>
      */
-    private CgmesDiffExport.ExportOptions withVariant(CgmesDiffExport.ExportOptions exportOptions, String variant) {
+    private void selectVariant(String variant, Consumer<String> setVariant, Consumer<Boolean> setRejectSharedChanges) {
         if (variant != null) {
-            exportOptions.setVariant(variant);
-            exportOptions.setRejectSharedChanges(hasSeveralVariants());
+            setVariant.accept(variant);
+            setRejectSharedChanges.accept(network.getVariantManager().getVariantIds().size() > 1);
         }
-        return exportOptions;
     }
 
-    private boolean hasSeveralVariants() {
-        return network.getVariantManager().getVariantIds().size() > 1;
+    /** {@link #exportWithSnapshot}, with the identity of {@code variant} swapped in while the exporter runs. */
+    private <T> T exportIn(String variant, Function<List<NetworkEvent>, T> exporter) {
+        return exportWithSnapshot(events -> RdfDbProvenance.inVariant(network, variant, () -> exporter.apply(events)));
     }
 
     /**

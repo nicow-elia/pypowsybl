@@ -971,7 +971,7 @@ std::string exportNetworkEventsToCgmesDiff(const JavaHandle& recorder, const std
 std::map<std::string, std::string> exportNetworkEventsToCgmesDiffs(const JavaHandle& recorder, const std::map<std::string, std::string>& options);
 
 /**
- * RDF database: the split CGMES loading of follow-up work package 1.
+ * RDF database: the split CGMES loading (files -> RDF database -> IIDM).
  * CGMES files are read once into a SPARQL graph database, and a network is built from the database afterwards.
  * The handle wraps a Java RdfDbConnection; closeRdfDbConnection releases the server connection, destroying the
  * handle alone would only drop the reference.
@@ -983,8 +983,6 @@ std::map<std::string, std::string> exportNetworkEventsToCgmesDiffs(const JavaHan
 JavaHandle createRdfDbConnection(const std::string& url, const std::map<std::string, std::string>& options);
 
 void closeRdfDbConnection(const JavaHandle& db);
-
-std::vector<std::string> getRdfDbScenarios(const JavaHandle& db);
 
 SeriesArray* getRdfDbGraphs(const JavaHandle& db, const std::string& scenario);
 
@@ -1047,7 +1045,7 @@ std::map<std::string, std::string> getNetworkRdfDbIdentity(const JavaHandle& net
                                                            const std::string& scenario, const std::string& variant);
 
 /**
- * Snapshots as network variants (step 12). The three string vectors are parallel: one entry per requested
+ * Snapshots as network variants. The three string vectors are parallel: one entry per requested
  * snapshot, an empty string meaning "let the library decide" (the naming rule, the newest version, the base
  * timestep). The returned handle wraps the network, whose variants stand for the snapshots that could be reached.
  */

@@ -155,6 +155,13 @@ def _check_scenario(scenario: str) -> str:
     return scenario
 
 
+def _check_variant(variant: str) -> str:
+    """A variant identifier is a non-blank string; raises :class:`ValueError` otherwise."""
+    if not isinstance(variant, str) or not variant.strip():
+        raise ValueError(f'A variant identifier must be a non-blank string, got {variant!r}')
+    return variant
+
+
 class RdfDatabase:
     """
     An open connection to an RDF graph database holding CGMES instance files as named graphs.
@@ -184,8 +191,7 @@ class RdfDatabase:
 
     def __init__(self, url: str, handle: _pp.JavaHandle) -> None:
         self._url = url
-        self._handle = handle
-        self._closed = False
+        self._handle: Optional[_pp.JavaHandle] = handle  # None once closed
 
     @property
     def url(self) -> str:
@@ -200,15 +206,15 @@ class RdfDatabase:
         self.close()
 
     def __repr__(self) -> str:
-        return f'{self.__class__.__name__}(url={self._url!r}, closed={self._closed})'
+        return f'{self.__class__.__name__}(url={self._url!r}, closed={self.closed})'
 
     def close(self) -> None:
         """
         Close the connection. Calling it twice, or after the object was used as a context manager, does nothing.
         """
-        if not self._closed:
-            self._closed = True
-            _pp.close_rdf_db_connection(self._handle)
+        handle, self._handle = self._handle, None
+        if handle is not None:
+            _pp.close_rdf_db_connection(handle)
 
     def __del__(self) -> None:
         # An interpreter shutdown can take the extension module away before the last reference dies
@@ -218,14 +224,14 @@ class RdfDatabase:
             pass
 
     def _check_open(self) -> _pp.JavaHandle:
-        if self._closed:
+        if self._handle is None:
             raise _pp.PyPowsyblError(f'RDF database connection to {self._url} is closed')
         return self._handle
 
     @property
     def closed(self) -> bool:
         """Whether :meth:`close` has already been called."""
-        return self._closed
+        return self._handle is None
 
     def scenarios(self) -> DataFrame:
         """
@@ -536,8 +542,7 @@ def _variant_requests(version: Optional[str], timesteps: Optional[Sequence[Times
     else:
         assert variants is not None
         for variant_id, address in variants.items():
-            if not isinstance(variant_id, str) or not variant_id.strip():
-                raise ValueError(f'A variant identifier must be a non-blank string, got {variant_id!r}')
+            _check_variant(variant_id)
             if isinstance(address, (tuple, list)):
                 if len(address) != 2:
                     raise ValueError(f"Address {address!r} of variant '{variant_id}' must be a timestep or a "

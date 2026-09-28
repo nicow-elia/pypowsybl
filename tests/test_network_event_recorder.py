@@ -30,11 +30,6 @@ MD = 'http://iec.ch/TC57/61970-552/ModelDescription/1#'
 DM = 'http://iec.ch/TC57/61970-552/DifferenceModel/1#'
 
 
-@pytest.fixture(autouse=True)
-def set_up():
-    pp.set_config_read(False)
-
-
 def load_network() -> pp.network.Network:
     return pp.network.load(DATA_DIR / 'CGMES_Full.zip')
 
@@ -858,7 +853,7 @@ def test_mixed_steady_state_and_equipment_changes(sender, receiver, tmp_path):
         change_limit(sender, row, row['value'] + 40.0)
 
         assert recorder.touched_profiles() == ['EQ', 'SSH']
-        # without a profile the export refuses to pick one
+        # without a profile the two documents make a zip archive, which a string cannot hold
         with pytest.raises(PyPowsyblError):
             recorder.to_cgmes_diff()
 

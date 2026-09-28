@@ -9,16 +9,13 @@ package com.powsybl.python.network;
 
 import com.powsybl.cgmes.rdfdb.RdfDbConnection;
 import com.powsybl.iidm.network.Network;
-import org.apache.jena.fuseki.main.FusekiServer;
-import org.apache.jena.sparql.core.DatasetGraphFactory;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static com.powsybl.python.network.RdfDbTestSupport.totalLoad;
 import static com.powsybl.python.network.RdfDbUtilTest.importParameters;
 import static com.powsybl.python.network.RdfDbUtilVersionedTest.timestepFiles;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -35,31 +32,7 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-class RdfDbUtilVariantsFusekiTest {
-
-    private static FusekiServer server;
-
-    @BeforeAll
-    static void startServer() {
-        server = FusekiServer.create()
-                .port(0)
-                .verbose(false)
-                .enablePing(true)
-                .add("/ds", DatasetGraphFactory.createTxnMem(), true)
-                .build()
-                .start();
-    }
-
-    @AfterAll
-    static void stopServer() {
-        if (server != null) {
-            server.stop();
-        }
-    }
-
-    private static String datasetUrl() {
-        return "http://localhost:" + server.getPort() + "/ds";
-    }
+class RdfDbUtilVariantsFusekiTest extends AbstractFusekiTest {
 
     private static String scenario(String suffix) {
         return "2014-06-01-" + suffix + "-" + UUID.randomUUID().toString().substring(0, 8);
@@ -74,16 +47,6 @@ class RdfDbUtilVariantsFusekiTest {
                 "8:30", importParameters(), null);
         RdfDbUtil.loadCgmes(db, timestepFiles("f0845", 1.3, "2014-06-01T08:45:00Z", false), scenario, "1.1",
                 "8:45", importParameters(), null);
-    }
-
-    private static double totalLoad(Network network, String variant) {
-        String previous = network.getVariantManager().getWorkingVariantId();
-        network.getVariantManager().setWorkingVariant(variant);
-        try {
-            return network.getLoadStream().mapToDouble(load -> load.getP0()).sum();
-        } finally {
-            network.getVariantManager().setWorkingVariant(previous);
-        }
     }
 
     @Test

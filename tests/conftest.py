@@ -6,7 +6,7 @@
 # SPDX-License-Identifier: MPL-2.0
 #
 """
-Shared fixtures for the RDF database tests.
+Shared fixtures: no user configuration for any test, and the two backends of the RDF database tests.
 
 Two backends are exercised by the same tests: the in-process ``memory:`` store, which is always available, and a
 real Apache Jena Fuseki server started as a **subprocess** (never as a binding - Jena must not enter the native
@@ -19,6 +19,13 @@ from uuid import uuid4
 import pytest
 
 import fuseki_server
+import pypowsybl as pp
+
+
+@pytest.fixture(autouse=True)
+def no_config() -> None:
+    """Every test runs without the user's ``~/.itools/config.yml``, whatever the module."""
+    pp.set_config_read(False)
 
 
 @pytest.fixture(scope='session')

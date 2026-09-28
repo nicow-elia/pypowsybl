@@ -13,10 +13,6 @@ import com.powsybl.cgmes.rdfdb.SnapshotInfo;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
-import org.apache.jena.fuseki.main.FusekiServer;
-import org.apache.jena.sparql.core.DatasetGraphFactory;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 
 import java.util.List;
@@ -40,31 +36,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-class RdfDbUtilVersionedFusekiTest {
-
-    private static FusekiServer server;
-
-    @BeforeAll
-    static void startServer() {
-        server = FusekiServer.create()
-                .port(0)
-                .verbose(false)
-                .enablePing(true)
-                .add("/ds", DatasetGraphFactory.createTxnMem(), true)
-                .build()
-                .start();
-    }
-
-    @AfterAll
-    static void stopServer() {
-        if (server != null) {
-            server.stop();
-        }
-    }
-
-    private static String datasetUrl() {
-        return "http://localhost:" + server.getPort() + "/ds";
-    }
+class RdfDbUtilVersionedFusekiTest extends AbstractFusekiTest {
 
     /** A scenario name of its own per test, so that the tests of this class share one server without sharing data. */
     private static String scenario(String suffix) {

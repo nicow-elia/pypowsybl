@@ -32,11 +32,6 @@ from test_network_event_recorder import (apply_five_changes, assert_same_setpoin
 PARAMS = {'iidm.import.cgmes.create-cgmes-export-mapping': 'true'}
 
 
-@pytest.fixture(autouse=True)
-def no_config() -> None:
-    pp.set_config_read(False)
-
-
 def _root(db: pp.network.RdfDatabase, scenario: str) -> pp.network.Network:
     """Store the base grid model as the root of a scenario and return the network of that root."""
     ids = db.load_cgmes(CGMES_ZIP, scenario, '1.0', parameters=PARAMS)

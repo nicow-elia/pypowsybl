@@ -10,10 +10,6 @@ package com.powsybl.python.network;
 import com.powsybl.cgmes.rdfdb.RdfDbConnection;
 import com.powsybl.cgmes.rdfdb.RdfDbException;
 import com.powsybl.iidm.network.Network;
-import org.apache.jena.fuseki.main.FusekiServer;
-import org.apache.jena.sparql.core.DatasetGraphFactory;
-import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.junit.jupiter.api.Test;
@@ -38,33 +34,9 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
-class RdfDbUtilFusekiTest {
+class RdfDbUtilFusekiTest extends AbstractFusekiTest {
 
     private static final String SCENARIO = "2021-02-09";
-
-    private static FusekiServer server;
-
-    @BeforeAll
-    static void startServer() {
-        server = FusekiServer.create()
-                .port(0)
-                .verbose(false)
-                .enablePing(true)
-                .add("/ds", DatasetGraphFactory.createTxnMem(), true)
-                .build()
-                .start();
-    }
-
-    @AfterAll
-    static void stopServer() {
-        if (server != null) {
-            server.stop();
-        }
-    }
-
-    private static String datasetUrl() {
-        return "http://localhost:" + server.getPort() + "/ds";
-    }
 
     @ParameterizedTest(name = "query_mode={0}")
     @ValueSource(strings = {"local", "remote"})
