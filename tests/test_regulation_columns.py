@@ -206,10 +206,8 @@ def test_vsc_switched_off_then_reactive_setpoint():
     assert n.get_vsc_converter_stations().loc['VSC1', 'q'] == pytest.approx(-30.0, abs=1e-3)
 
 
-@pytest.mark.xfail(strict=True, reason='powsybl-core: the full CGMES SSH export writes targetQpcc 0 for a VSC station '
-                                       'whose VoltageRegulation does not regulate (review 21 F1 e); fixed in core by '
-                                       'the core engineer, this test then passes and the marker has to go')
 def test_vsc_reactive_setpoint_survives_full_cgmes_export(tmp_path):
+    """F1 e: core wrote targetQpcc 0 for a station whose regulation does not regulate (fixed in core, 03:28)."""
     n = pp.network.create_four_substations_node_breaker_network()
     n.update_vsc_converter_stations(id='VSC1', voltage_regulator_on=False, target_q=30.0)
     n.save(str(tmp_path / 'vsc'), format='CGMES')
