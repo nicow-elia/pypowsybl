@@ -76,9 +76,10 @@
             import below once powsybl-dependencies ships a core release with those changes. Until then this
             pypowsybl tree only builds against a locally installed core SNAPSHOT: Maven Central has no such
             artifact, and snapshot-ci.yml rebuilds the powsybl-dependencies BOM instead of setting this property,
-            so the hard-coded version here would override that BOM as soon as core moves past 7.4.0-SNAPSHOT.
+            so the hard-coded version here would override that BOM. Since the merge of upstream core main it is
+            7.5.0-SNAPSHOT (voltage regulation refactoring powsybl-core#3699 included).
         -->
-        <powsybl-core.version>7.4.0-SNAPSHOT</powsybl-core.version>
+        <powsybl-core.version>7.5.0-SNAPSHOT</powsybl-core.version>
         <powsybl-open-reac.version>0.18.0</powsybl-open-reac.version>
     </properties>
 
