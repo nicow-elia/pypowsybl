@@ -46,12 +46,21 @@ def _svc_mode_in_another_variant(tmp_path: pathlib.Path) -> pp.network.Network:
     return n
 
 
+def _vsc_stations_moved(tmp_path: pathlib.Path) -> pp.network.Network:
+    """Both VSC stations of the CGMES network moved to the other mode (closing review C-M1)."""
+    n = _four_substations_cgmes(tmp_path)
+    n.update_vsc_converter_stations(id='VSC1', voltage_regulator_on=False, target_q=33.0)
+    n.update_vsc_converter_stations(id='VSC2', target_v=402.0, voltage_regulator_on=True)
+    return n
+
+
 # name -> (factory, whether the network comes from CGMES, i.e. whether a change of it can be exported as SSH)
 NETWORKS = {
     'four_substations': (lambda tmp: pp.network.create_four_substations_node_breaker_network(), False),
     'four_substations_extensions':
         (lambda tmp: pp.network.create_four_substations_node_breaker_network_with_extensions(), False),
     'four_substations_cgmes': (_four_substations_cgmes, True),
+    'four_substations_cgmes_vsc_moved': (_vsc_stations_moved, True),
     'micro_grid_be': (lambda tmp: pp.network.create_micro_grid_be_network(), True),
     'micro_grid_nl': (lambda tmp: pp.network.create_micro_grid_nl_network(), True),
     'cgmes_full': (lambda tmp: pp.network.load(DATA_DIR / 'CGMES_Full.zip'), True),
@@ -396,3 +405,44 @@ def test_vsc_switched_on_and_off_again_is_exported(tmp_path, route):
     columns = ['target_q', 'voltage_regulator_on', 'regulated_element_id']
     pd.testing.assert_frame_equal(_vsc_columns(receiver, columns), _vsc_columns(sender, columns))
     assert math.isnan(receiver.get_vsc_converter_stations().loc['VSC2', 'target_v'])
+
+
+DB_PARAMETERS = {'iidm.import.cgmes.create-cgmes-export-mapping': 'true'}
+
+
+def test_vsc_moves_between_voltage_and_reactive_power_through_the_database_and_back(tmp_path, rdf_db_url, scenario):
+    """
+    The same moves stored as snapshots of an RDF database: a second network reaches each snapshot by applying the
+    stored differences forwards, and gets back by applying them backwards - the revert of a difference.
+    """
+    folder = tmp_path / 'root'
+    folder.mkdir()
+    pp.network.create_four_substations_node_breaker_network().save(str(folder / 'four'), format='CGMES')
+    with pp.network.connect_rdf_db(rdf_db_url) as db:
+        db.load_cgmes(folder, scenario, '1.0', parameters=DB_PARAMETERS)
+        sender = pp.network.from_rdf_db(db, scenario, '1.0', parameters=DB_PARAMETERS)
+        states = {'1.0': _vsc_columns(sender)}
+        for version, update in (('1.1', {'voltage_regulator_on': False, 'target_q': 33.0}),
+                                ('1.2', {'target_v': 401.0, 'voltage_regulator_on': True})):
+            with sender.event_recorder() as recorder:
+                sender.update_vsc_converter_stations(id='VSC1', **update)
+                assert recorder.to_rdf_updates(db, scenario, version)
+            states[version] = _vsc_columns(sender)
+        assert row(sender.get_vsc_converter_stations(), 'VSC1') == [401.0, 33.0, True, 'VSC1']
+        assert row(states['1.1'], 'VSC1') == [400.0, 33.0, False, 'VSC1']
+
+        receiver = pp.network.from_rdf_db(db, scenario, '1.0', parameters=DB_PARAMETERS)
+        for version in ('1.1', '1.2'):
+            assert receiver.update_from_rdf_db(db, scenario, version) == 'diff'
+            pd.testing.assert_frame_equal(_vsc_columns(receiver), states[version], obj=f'VSC stations at {version}')
+
+        # backwards: the station returns to reactive power regulation with its reactive target; its voltage target,
+        # inactive in that mode, is not read by the CGMES update (core, review 21 R2-6 b), so the receiver keeps the
+        # 401 of version 1.2 instead of the 400 of version 1.1 - pinned until core reads it
+        assert receiver.update_from_rdf_db(db, scenario, '1.1') == 'diff'
+        columns = ['target_q', 'voltage_regulator_on', 'regulated_element_id']
+        pd.testing.assert_frame_equal(_vsc_columns(receiver, columns), states['1.1'][columns], obj='VSC stations at 1.1')
+        assert receiver.get_vsc_converter_stations().loc['VSC1', 'target_v'] == 401.0
+
+        assert receiver.update_from_rdf_db(db, scenario, '1.0') == 'diff'
+        pd.testing.assert_frame_equal(_vsc_columns(receiver), states['1.0'], obj='VSC stations at 1.0')
