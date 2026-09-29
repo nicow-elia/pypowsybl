@@ -12,6 +12,7 @@ regulated_element_id, ...) since powsybl-core 7.5, where they all live in one Vo
 They must keep behaving as the independent attributes they were before: writing a dataframe back unchanged changes
 nothing, and the order in which the columns of one update are applied does not matter.
 """
+import math
 import pathlib
 
 import pandas as pd
@@ -349,8 +350,8 @@ def _apply(recorder, route: str, receiver: pp.network.Network, parameters=None) 
         receiver.update_from_string(recorder.to_cgmes_diff(), 'update_SSH_DIFF.xml', parameters=parameters)
 
 
-def _vsc_columns(n: pp.network.Network) -> list:
-    return n.get_vsc_converter_stations()[COLUMNS].values.tolist()
+def _vsc_columns(n: pp.network.Network, columns=None) -> pd.DataFrame:
+    return n.get_vsc_converter_stations()[columns or COLUMNS]
 
 
 @pytest.mark.parametrize('route', ['ssh', 'diff'])
@@ -366,18 +367,18 @@ def test_vsc_moves_between_voltage_and_reactive_power_through_the_change_export(
         sender.update_vsc_converter_stations(id='VSC1', voltage_regulator_on=False, target_q=33.0)
         assert row(sender.get_vsc_converter_stations(), 'VSC1') == [400.0, 33.0, False, 'VSC1']
         _apply(recorder, route, receiver)
-        assert _vsc_columns(receiver) == _vsc_columns(sender)
+        pd.testing.assert_frame_equal(_vsc_columns(receiver), _vsc_columns(sender))
         recorder.clear()
 
         sender.update_vsc_converter_stations(id='VSC1', target_v=401.0, voltage_regulator_on=True)
         _apply(recorder, route, receiver, NO_SUPERSEDES_CHECK)
-        assert _vsc_columns(receiver) == _vsc_columns(sender)
+        pd.testing.assert_frame_equal(_vsc_columns(receiver), _vsc_columns(sender))
         recorder.clear()
 
         # back to where it started: the receiver too
         sender.update_vsc_converter_stations(id='VSC1', target_v=400.0, target_q=500.0)
         _apply(recorder, route, receiver, NO_SUPERSEDES_CHECK)
-    assert _vsc_columns(receiver) == original
+    pd.testing.assert_frame_equal(_vsc_columns(receiver), original)
 
 
 @pytest.mark.parametrize('route', ['ssh', 'diff'])
@@ -390,4 +391,8 @@ def test_vsc_switched_on_and_off_again_is_exported(tmp_path, route):
         sender.update_vsc_converter_stations(id='VSC2', voltage_regulator_on=False)
         assert row(sender.get_vsc_converter_stations(), 'VSC2')[1:3] == [120.0, False]
         _apply(recorder, route, receiver)
-    assert _vsc_columns(receiver) == _vsc_columns(sender)
+    # the voltage target of a station in reactive power mode is not carried (core, review 21 R2-6 b): the receiver
+    # keeps its own (NaN); everything else arrives
+    columns = ['target_q', 'voltage_regulator_on', 'regulated_element_id']
+    pd.testing.assert_frame_equal(_vsc_columns(receiver, columns), _vsc_columns(sender, columns))
+    assert math.isnan(receiver.get_vsc_converter_stations().loc['VSC2', 'target_v'])

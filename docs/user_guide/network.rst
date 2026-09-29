@@ -280,8 +280,10 @@ Known limitations with powsybl-core 7.5:
 * The regulated element (``regulated_element_id``, and ``regulated_side`` of tap changers) cannot be changed while the
   network has several variants: core refuses it ("Cannot set terminal when there are multiple variants"). Writing
   the unchanged value back is fine.
-* A VSC converter station has no column for its regulation mode: ``voltage_regulator_on=False`` clears the
-  regulating flag (the station then follows ``target_q``), ``True`` moves it to voltage control.
+* A VSC converter station has no column for its regulation mode: ``voltage_regulator_on=False`` makes it regulate
+  its reactive power (``target_q``) at its own terminal, ``True`` its voltage (``target_v``). With several variants,
+  or for a station regulating a remote terminal, ``False`` only clears the regulating flag (the station follows
+  ``target_q`` all the same, but CGMES cannot carry that change).
 * ``equivalent_local_target_v`` of a generator is its local voltage target, which for a generator regulating locally
   is its ``target_v`` (before core 7.5: NaN unless set explicitly).
 * The extension ``voltagePerReactivePowerControl`` of static var compensators is a view on the regulation: creating

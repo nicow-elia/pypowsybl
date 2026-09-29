@@ -13,6 +13,7 @@ import com.powsybl.iidm.network.Generator;
 import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.Terminal;
+import com.powsybl.iidm.network.VscConverterStation;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
@@ -88,7 +89,8 @@ public final class VoltageRegulationColumns {
 
     /**
      * Switching on regulates in mode {@link RegulationMode#VOLTAGE} (a regulation is created when there is none, a
-     * regulation in another mode is switched as by {@link #setMode}); switching off only clears the regulating flag.
+     * regulation in another mode is switched as by {@link #setMode}); switching off clears the regulating flag, except
+     * for a VSC station regulating at its own terminal, which then regulates its reactive power there.
      * The value shown unchanged is a no-op; a refused switch leaves the equipment as it was.
      */
     public static void setVoltageRegulatorOn(VoltageRegulationHolder<?> holder, boolean on) {
@@ -98,9 +100,26 @@ public final class VoltageRegulationColumns {
         VoltageRegulation regulation = holder.getVoltageRegulation();
         if (on) {
             switchRegulation(holder, VOLTAGE, true);
+        } else if (regulatesReactivePowerWhenOff(holder)) {
+            // a CGMES VsConverter has no control flag: off means following target_q, a reactive power regulation at
+            // the station's own terminal, which the change exports carry (qPccControl reactivePcc)
+            if (!regulation.isWithTerminal()) {
+                regulation.setTerminal(holder.getTerminal(), holder.getRegulatingTargetV());
+            }
+            switchRegulation(holder, REACTIVE_POWER, true);
         } else {
             regulation.setRegulating(false);
         }
+    }
+
+    /** A VSC station regulating at its own terminal (or able to get one: a single variant) with a reactive target. */
+    private static boolean regulatesReactivePowerWhenOff(VoltageRegulationHolder<?> holder) {
+        if (!(holder instanceof VscConverterStation station) || Double.isNaN(getTargetQ(station))) {
+            return false;
+        }
+        return station.getVoltageRegulation().isWithTerminal()
+                ? station.getRegulatingTerminal() == station.getTerminal()
+                : station.getNetwork().getVariantManager().getVariantIds().size() == 1;
     }
 
     /** The mode of the regulation, null without regulation (or without mode in the working variant). */

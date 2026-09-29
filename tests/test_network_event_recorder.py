@@ -295,12 +295,15 @@ def test_load_flow_inside_block_is_unsupported(sender):
 
 def test_vsc_regulation_switched_off_is_unsupported(tmp_path):
     """
-    Since powsybl-core 7.5 a VSC station regulates through its VoltageRegulation; ``voltage_regulator_on=False`` only
-    clears the regulating flag, and a CGMES VsConverter has no control flag to carry that. The change export refuses
-    it instead of writing a state the receiver would read back differently.
+    Since powsybl-core 7.5 a VSC station regulates through its VoltageRegulation. ``voltage_regulator_on=False`` moves
+    a station to reactive power regulation at its own terminal, which CGMES carries (``test_regulation_columns.py``),
+    except where no terminal can be set, with several variants: it then only clears the regulating flag, and a CGMES
+    VsConverter has no control flag to carry that. The change export refuses it instead of writing a state the
+    receiver would read back differently.
     """
     pp.network.create_four_substations_node_breaker_network().save(str(tmp_path / 'vsc'), format='CGMES')
     n = pp.network.load(str(tmp_path))
+    n.clone_variant(n.get_working_variant_id(), 'other')
     with n.event_recorder() as recorder:
         n.update_vsc_converter_stations(id='VSC1', voltage_regulator_on=False, target_q=30.0)
         # the events of the regulation and of the local target, no echo of core's deprecated setters
