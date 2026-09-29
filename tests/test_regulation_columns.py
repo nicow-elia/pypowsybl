@@ -14,6 +14,7 @@ nothing, and the order in which the columns of one update are applied does not m
 """
 import math
 import pathlib
+import re
 
 import pandas as pd
 import pytest
@@ -331,8 +332,11 @@ def test_switching_on_equipment_without_regulation_is_exported_or_refused(tmp_pa
     with sender.event_recorder() as recorder:
         getattr(sender, 'update_' + kind)(id=element_id, **switch_on)
         assert 'VoltageRegulation.isRegulating' in list(recorder.events['attribute'])
+        # the cause and the remedy, not the whole wording
+        refusal = (f'{re.escape(element_id)} has no CGMES regulating control the import could use: .*'
+                   r'Remedy: .*give it a VoltageRegulation \(not regulating\) first and export the full model')
         for export in (recorder.to_ssh, recorder.to_cgmes_diff):
-            with pytest.raises(pp.PyPowsyblError, match=f'{element_id} has no CGMES regulating control to carry'):
+            with pytest.raises(pp.PyPowsyblError, match=refusal):
                 export()
 
 

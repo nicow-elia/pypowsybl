@@ -36,15 +36,11 @@ transfer layer was needed.
 
 The assertions here are loose CI guards, not the target.
 """
-import pathlib
 import sys
 import time
 from typing import Callable, Dict, List, Tuple
 
 import pypowsybl as pp
-
-TEST_DIR = pathlib.Path(__file__).parent
-DATA_DIR = TEST_DIR.parent / 'data'
 
 # The receiver measurement applies the same document over and over, so the supersedes check has to be off; a
 # partial SSH additionally needs the receiver to keep the values it does not mention.
@@ -58,17 +54,14 @@ UPDATES = 1000
 
 def _benchmark_network() -> pp.network.Network:
     """
-    A network the CGMES exporters accept, that is one that came from CGMES.
+    A network the CGMES exporters accept, that is one that came from CGMES: ieee300 after a CGMES round trip.
 
-    ieee300 is preferred because it is large, but only if a CGMES round trip of it works; otherwise the CGMES
-    conformity fixture is used, which is small but certainly valid.
+    There is deliberately no fallback to another network: numbers of a different network are not comparable with the
+    table above, so a failing round trip fails the benchmark.
     """
-    try:
-        buffer = pp.network.create_ieee300().save_to_binary_buffer(format='CGMES')
-        buffer.seek(0)
-        return pp.network.load_from_binary_buffer(buffer)
-    except Exception:  # pylint: disable=broad-except
-        return pp.network.load(DATA_DIR / 'CGMES_Full.zip')
+    buffer = pp.network.create_ieee300().save_to_binary_buffer(format='CGMES')
+    buffer.seek(0)
+    return pp.network.load_from_binary_buffer(buffer)
 
 
 def _best_of(action: Callable[[], None]) -> float:
