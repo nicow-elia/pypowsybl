@@ -7,12 +7,15 @@
  */
 package com.powsybl.dataframe.network;
 
+import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Battery;
 import com.powsybl.iidm.network.Generator;
+import com.powsybl.iidm.network.Identifiable;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.regulation.VoltageRegulation;
+import com.powsybl.iidm.network.regulation.VoltageRegulationBuilder;
 import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 import com.powsybl.python.network.NetworkUtil;
 
@@ -49,10 +52,12 @@ public final class VoltageRegulationColumns {
     private VoltageRegulationColumns() {
     }
 
+    /** The voltage target as core reads it: the regulation's target value with a terminal, the local one otherwise. */
     public static double getTargetV(VoltageRegulationHolder<?> holder) {
         return holder.getRegulatingTargetV();
     }
 
+    /** Writes the voltage target where {@link #getTargetV} reads it. */
     public static void setTargetV(VoltageRegulationHolder<?> holder, double targetV) {
         if (holder.hasRegulatingTerminal() && (holder.isWithMode(VOLTAGE) || holder.isWithMode(VOLTAGE_PER_REACTIVE_POWER))) {
             holder.getVoltageRegulation().setTargetValue(targetV);
@@ -61,10 +66,12 @@ public final class VoltageRegulationColumns {
         }
     }
 
+    /** The reactive power target shown: the local one for generators and batteries, as core reads it otherwise. */
     public static double getTargetQ(VoltageRegulationHolder<?> holder) {
         return showsLocalTargetQ(holder) ? holder.getLocalTargetQ() : holder.getRegulatingTargetQ();
     }
 
+    /** Writes the reactive power target where {@link #getTargetQ} reads it. */
     public static void setTargetQ(VoltageRegulationHolder<?> holder, double targetQ) {
         if (!showsLocalTargetQ(holder) && holder.hasRegulatingTerminal() && holder.isWithMode(REACTIVE_POWER)) {
             holder.getVoltageRegulation().setTargetValue(targetQ);
@@ -73,50 +80,50 @@ public final class VoltageRegulationColumns {
         }
     }
 
+    /** Regulating in mode {@link RegulationMode#VOLTAGE}. */
     public static boolean isVoltageRegulatorOn(VoltageRegulationHolder<?> holder) {
         return holder.isRegulatingWithMode(VOLTAGE);
     }
 
+    /**
+     * Switching on regulates in mode {@link RegulationMode#VOLTAGE} (a regulation is created when there is none, a
+     * regulation in another mode is switched as by {@link #setMode}); switching off only clears the regulating flag.
+     * The value shown unchanged is a no-op; a refused switch leaves the equipment as it was.
+     */
     public static void setVoltageRegulatorOn(VoltageRegulationHolder<?> holder, boolean on) {
-        if (on != isVoltageRegulatorOn(holder)) {
-            if (on) {
-                setMode(holder, VOLTAGE);
-            }
-            setRegulating(holder, on);
+        if (on == isVoltageRegulatorOn(holder)) {
+            return;
+        }
+        VoltageRegulation regulation = holder.getVoltageRegulation();
+        if (on) {
+            switchRegulation(holder, VOLTAGE, true);
+        } else {
+            regulation.setRegulating(false);
         }
     }
 
+    /** The mode of the regulation, null without regulation (or without mode in the working variant). */
     public static RegulationMode getMode(VoltageRegulationHolder<?> holder) {
         VoltageRegulation regulation = holder.getVoltageRegulation();
         return regulation != null ? regulation.getMode() : null;
     }
 
+    /**
+     * Changes the mode and keeps the targets shown and the regulating flag; creates a non regulating regulation when
+     * there is none. The mode shown unchanged is a no-op; a refused switch leaves the equipment as it was.
+     */
     public static void setMode(VoltageRegulationHolder<?> holder, RegulationMode mode) {
         VoltageRegulation regulation = holder.getVoltageRegulation();
-        if (regulation == null) {
-            holder.newVoltageRegulation().withMode(mode).withRegulating(false).build();
-        } else if (regulation.getMode() != mode) {
-            double targetV = getTargetV(holder);
-            double targetQ = getTargetQ(holder);
-            boolean regulating = regulation.isRegulating();
-            if (regulating) {
-                // the target value is only checked against the mode while regulating: the switch goes through a
-                // non regulating state, in which the target of the old mode can be replaced by the one of the new mode
-                regulation.setRegulating(false);
-            }
-            regulation.setMode(mode);
-            if (Double.compare(getTargetV(holder), targetV) != 0) {
-                setTargetV(holder, targetV);
-            }
-            if (Double.compare(getTargetQ(holder), targetQ) != 0) {
-                setTargetQ(holder, targetQ);
-            }
-            if (regulating) {
-                regulation.setRegulating(true);
-            }
+        if (regulation == null || regulation.getMode() != mode) {
+            switchRegulation(holder, mode, regulation != null && regulation.isRegulating());
         }
     }
 
+    /**
+     * Sets the regulating flag; a compensator without regulation that starts regulating gets one in mode
+     * {@link RegulationMode#REACTIVE_POWER} (as core's {@code StaticVarCompensator.setRegulating}; the SVC
+     * {@code regulating} column is the only one that gets here without a regulation). The flag shown is a no-op.
+     */
     public static void setRegulating(VoltageRegulationHolder<?> holder, boolean regulating) {
         VoltageRegulation regulation = holder.getVoltageRegulation();
         if (regulation != null) {
@@ -124,15 +131,64 @@ public final class VoltageRegulationColumns {
                 regulation.setRegulating(regulating);
             }
         } else if (regulating) {
-            // as core's StaticVarCompensator.setRegulating, the only column that can get here without a regulation
-            holder.newVoltageRegulation().withMode(REACTIVE_POWER).withRegulating(true).build();
+            newRegulation(holder, REACTIVE_POWER, true).build();
         }
     }
 
+    /**
+     * Puts the regulation in the given mode and regulating state, all or nothing, keeping the targets shown: the
+     * target of the new mode goes into the regulation (when it has a terminal), the one of the old mode stays shown
+     * through the local target. The refusals core can make after the mode is set (an undefined target to regulate
+     * with) are checked before anything is written, so a refused switch leaves the equipment as it was. The
+     * regulating flag is not cleared on the way: a non regulating regulation needs local targets the equipment may
+     * not have.
+     */
+    private static void switchRegulation(VoltageRegulationHolder<?> holder, RegulationMode mode, boolean regulating) {
+        VoltageRegulation regulation = holder.getVoltageRegulation();
+        if (regulation == null) {
+            newRegulation(holder, mode, regulating).build(); // one validated step
+            return;
+        }
+        double targetV = getTargetV(holder);
+        double targetQ = getTargetQ(holder);
+        double target = mode == REACTIVE_POWER ? targetQ : targetV;
+        if (regulating && Double.isNaN(target)) {
+            throw new PowsyblException(nameOf(holder) + ": cannot regulate in mode " + mode + ", its target is undefined (NaN)");
+        }
+        regulation.setMode(mode); // first step that can be refused: nothing changed before it
+        if (regulation.isWithTerminal()) {
+            regulation.setTargetValue(target);
+        }
+        if (Double.compare(getTargetV(holder), targetV) != 0) {
+            holder.setLocalTargetV(targetV);
+        }
+        if (Double.compare(getTargetQ(holder), targetQ) != 0) {
+            holder.setLocalTargetQ(targetQ);
+        }
+        if (regulation.isRegulating() != regulating) {
+            regulation.setRegulating(regulating);
+        }
+    }
+
+    private static VoltageRegulationBuilder newRegulation(VoltageRegulationHolder<?> holder, RegulationMode mode, boolean regulating) {
+        return holder.newVoltageRegulation().withMode(mode).withRegulating(regulating);
+    }
+
+    private static String nameOf(VoltageRegulationHolder<?> holder) {
+        return holder instanceof Identifiable<?> identifiable ? "'" + identifiable.getId() + "'" : String.valueOf(holder);
+    }
+
+    /** The equipment of the regulating terminal, the holder itself when the regulation has no terminal. */
     public static String getRegulatedElementId(VoltageRegulationHolder<?> holder) {
         return NetworkUtil.getRegulatedElementId(holder::getRegulatingTerminal);
     }
 
+    /**
+     * Sets the regulating terminal from an element id, which must be an injection's ({@link NetworkUtil}); the id
+     * shown unchanged is a no-op, also when the current terminal is not an injection's. The battery
+     * {@code voltageRegulation} view resolves its ids itself (an empty id meaning the battery, as the former
+     * extension) and calls {@link #setRegulatingTerminal}, whose no-op test compares terminals.
+     */
     public static void setRegulatedElementId(VoltageRegulationHolder<?> holder, Network network, String elementId) {
         if (!elementId.equals(getRegulatedElementId(holder))) {
             NetworkUtil.setRegulatingTerminal(terminal -> setRegulatingTerminal(holder, terminal), network, elementId);
@@ -150,25 +206,26 @@ public final class VoltageRegulationColumns {
         }
         VoltageRegulation regulation = holder.getVoltageRegulation();
         if (regulation == null) {
-            holder.newVoltageRegulation().withMode(VOLTAGE).withRegulating(false)
-                    .withTerminal(terminal).withTargetValue(holder.getRegulatingTargetV()).build();
+            newRegulation(holder, VOLTAGE, false).withTerminal(terminal).withTargetValue(holder.getRegulatingTargetV()).build();
         } else {
             double target = regulation.getMode() == REACTIVE_POWER ? holder.getRegulatingTargetQ() : holder.getRegulatingTargetV();
             regulation.setTerminal(terminal, target);
         }
     }
 
+    /** The deadband of the regulation, NaN without regulation. */
     public static double getTargetDeadband(VoltageRegulationHolder<?> holder) {
         VoltageRegulation regulation = holder.getVoltageRegulation();
         return regulation != null ? regulation.getTargetDeadband() : Double.NaN;
     }
 
+    /** Sets the deadband; creates a non regulating regulation for a defined deadband when there is none. */
     public static void setTargetDeadband(VoltageRegulationHolder<?> holder, double targetDeadband) {
         VoltageRegulation regulation = holder.getVoltageRegulation();
         if (regulation != null) {
             regulation.setTargetDeadband(targetDeadband);
         } else if (!Double.isNaN(targetDeadband)) {
-            holder.newVoltageRegulation().withMode(VOLTAGE).withRegulating(false).withTargetDeadband(targetDeadband).build();
+            newRegulation(holder, VOLTAGE, false).withTargetDeadband(targetDeadband).build();
         }
     }
 
