@@ -87,8 +87,11 @@
             RatioTapChanger.RegulationMode, extensions RemoteReactivePowerControl, VoltagePerReactivePowerControl,
             VoltageRegulation; security LimitReduction). No adapted release exists yet, so these three are locally
             built SNAPSHOTs of their adapted upstream refs (OLF main fd435b3ca3, dynawo ci/core-7.4.0-SNAPSHOT
-            1b2980aadf, optimizer voltage_regulation_refacto_adaptations 2620ca3), installed into ~/.m2. Diagram,
-            entsoe and open-rao releases link against core 7.5 unchanged and stay on powsybl-dependencies.
+            1b2980aadf, optimizer voltage_regulation_refacto_adaptations 2620ca3), built with
+            -Dpowsybl-core.version=7.5.0-SNAPSHOT (so against the local core SNAPSHOT above, open-reac also with
+            -Dpowsybl-open-loadflow.version=2.4.0-SNAPSHOT) and installed into ~/.m2: this tree builds only where
+            they were built. Diagram, entsoe and open-rao releases link against core 7.5 unchanged and stay on
+            powsybl-dependencies.
         -->
         <powsybl-open-loadflow.version>2.4.0-SNAPSHOT</powsybl-open-loadflow.version>
         <powsybl-dynawo.version>3.4.0-SNAPSHOT</powsybl-dynawo.version>
