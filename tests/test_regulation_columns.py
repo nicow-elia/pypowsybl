@@ -282,3 +282,55 @@ def test_vsc_created_with_regulated_element_and_regulator_off_can_be_switched_on
     assert row(n.get_vsc_converter_stations(), 'V9') == [403.0, 3.0, False, 'GH2']
     n.update_vsc_converter_stations(id='V9', voltage_regulator_on=True)
     assert row(n.get_vsc_converter_stations(), 'V9') == [403.0, 3.0, True, 'GH2']
+
+
+# ------------------------------------------------- review 21 round 3 (R3-M1): switching on equipment without regulation
+
+def _cgmes_with_unregulated_equipment(tmp_path: pathlib.Path) -> pp.network.Network:
+    """
+    The four-substations network with one more generator, through CGMES: GTH1, G9 and SHUNT come back without
+    voltage regulation (core writes no RegulatingControl for them). A CGMES import gives every VSC station a
+    regulation (qPccControl), an SVC without regulation cannot be exported to CGMES ("Invalid regulation mode for
+    Static Var Compensator null"), and a battery comes back as a generator: those kinds have no such case.
+    """
+    folder = tmp_path / 'unregulated'
+    if not folder.exists():
+        n = pp.network.create_four_substations_node_breaker_network()
+        n.create_generators(id='G9', voltage_level_id='S1VL2', node=91, max_p=10, min_p=0, target_p=5, target_q=1.0,
+                            target_v=401.0)
+        n.create_switches(id='SWG9', voltage_level_id='S1VL2', node1=91, node2=0, kind='BREAKER', open=False)
+        folder.mkdir()
+        n.save(str(folder / 'unregulated'), format='CGMES')
+    return pp.network.load(str(folder))
+
+
+@pytest.mark.parametrize('kind, element_id, before, switch_on', [
+    ('generators', 'GTH1', {'target_v': 401.0}, {'voltage_regulator_on': True}),
+    ('generators', 'G9', {'target_v': 401.0}, {'voltage_regulator_on': True}),
+    ('shunt_compensators', 'SHUNT', {'target_v': 401.0}, {'target_deadband': 1.0, 'voltage_regulation_on': True}),
+])
+def test_switching_on_equipment_without_regulation_is_exported_or_refused(tmp_path, kind, element_id, before,
+                                                                          switch_on):
+    """
+    The regulation created by switching on must reach the recorder (R3-M1: a regulation created already regulating
+    fired no event, the exports wrote nothing and the receiver stayed without regulation). These equipments have no
+    RegulatingControl in their CGMES model, so core refuses the change: the refusal is pinned.
+    """
+    sender = _cgmes_with_unregulated_equipment(tmp_path)
+    getattr(sender, 'update_' + kind)(id=element_id, **before)
+    with sender.event_recorder() as recorder:
+        getattr(sender, 'update_' + kind)(id=element_id, **switch_on)
+        assert 'VoltageRegulation.isRegulating' in list(recorder.events['attribute'])
+        for export in (recorder.to_ssh, recorder.to_cgmes_diff):
+            with pytest.raises(pp.PyPowsyblError, match=f'{element_id} has no CGMES regulating control to carry'):
+                export()
+
+
+def test_battery_voltage_regulation_created_regulating_is_recorded():
+    n = pp.network.load(TEST_DIR / 'battery.xiidm')
+    battery = n.get_batteries().index[0]
+    n.remove_extensions('voltageRegulation', [battery])
+    with n.event_recorder() as recorder:
+        n.create_extensions('voltageRegulation', id=battery, voltage_regulator_on=True, target_v=401.0)
+        assert 'VoltageRegulation.isRegulating' in list(recorder.events['attribute'])
+    assert n.get_extensions('voltageRegulation').loc[battery, 'voltage_regulator_on']

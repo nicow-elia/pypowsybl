@@ -9,6 +9,9 @@ package com.powsybl.dataframe.network;
 
 import com.powsybl.dataframe.DataframeElementType;
 import com.powsybl.dataframe.update.DefaultUpdatingDataframe;
+import com.powsybl.dataframe.network.extensions.VoltageRegulationDataframeAdder;
+import com.powsybl.dataframe.update.TestDoubleSeries;
+import com.powsybl.dataframe.update.TestIntSeries;
 import com.powsybl.dataframe.update.TestStringSeries;
 import com.powsybl.iidm.network.*;
 import com.powsybl.iidm.network.test.FourSubstationsNodeBreakerFactory;
@@ -17,6 +20,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
+import java.util.ArrayList;
+import java.util.List;
 import java.nio.charset.StandardCharsets;
 
 import static com.powsybl.dataframe.network.VoltageRegulationColumns.*;
@@ -193,5 +198,93 @@ class VoltageRegulationColumnsTest {
         mapper.updateSeries(network, dataframe, NetworkDataframeContext.DEFAULT);
         assertEquals(before, xiidm(network));
         assertNull(network.getStaticVarCompensator("SVC9").getVoltageRegulation());
+    }
+    // ---------------------------------------------------------------- review 21 round 3 (R3-M1): creations are recorded
+
+    /** The updates the network reports, as "id.attribute=new value" (what the change recorder sees). */
+    private List<String> listen() {
+        List<String> updates = new ArrayList<>();
+        network.addListener(new NetworkListener() {
+            @Override
+            public void onUpdate(Identifiable<?> identifiable, String attribute, String variantId, Object oldValue, Object newValue) {
+                updates.add(identifiable.getId() + "." + attribute + "=" + newValue);
+            }
+        });
+        return updates;
+    }
+
+    private static final String REGULATING_ON = ".VoltageRegulation.isRegulating=true";
+
+    @Test
+    void switchingOnAGeneratorWithoutRegulationIsRecorded() {
+        Generator gth1 = network.getGenerator("GTH1");
+        gth1.removeVoltageRegulation();
+        List<String> updates = listen();
+        setVoltageRegulatorOn(gth1, true);
+        assertTrue(isVoltageRegulatorOn(gth1));
+        assertTrue(updates.contains("GTH1" + REGULATING_ON), updates::toString);
+    }
+
+    @Test
+    void switchingOnAVscWithoutRegulationIsRecorded() {
+        VscConverterStation vsc2 = network.getVscConverterStation("VSC2");
+        vsc2.setLocalTargetV(400);
+        List<String> updates = listen();
+        setVoltageRegulatorOn(vsc2, true);
+        assertTrue(updates.contains("VSC2" + REGULATING_ON), updates::toString);
+    }
+
+    @Test
+    void anSvcWithoutRegulationStartingToRegulateIsRecorded() {
+        network.getVoltageLevel("S1VL2").newStaticVarCompensator().setId("SVC9").setNode(90)
+                .setBmin(-0.01).setBmax(0.01).setLocalTargetQ(5).add();
+        List<String> updates = listen();
+        setRegulating(network.getStaticVarCompensator("SVC9"), true);
+        assertTrue(updates.contains("SVC9" + REGULATING_ON), updates::toString);
+    }
+
+    @Test
+    void aShuntWithoutRegulationSwitchedOnIsRecorded() {
+        ShuntCompensator shunt = network.getShuntCompensator("SHUNT");
+        shunt.removeVoltageRegulation();
+        List<String> updates = listen();
+        setTargetV(shunt, 401);
+        setTargetDeadband(shunt, 1);
+        setVoltageRegulatorOn(shunt, true);
+        assertTrue(updates.contains("SHUNT.VoltageRegulation.TargetDeadband=1.0"), updates::toString);
+        assertTrue(updates.contains("SHUNT" + REGULATING_ON), updates::toString);
+    }
+
+    @Test
+    void aRegulatedElementOnEquipmentWithoutRegulationIsRecorded() {
+        List<String> updates = listen();
+        setRegulatedElementId(network.getVscConverterStation("VSC2"), network, "VSC1");
+        assertTrue(updates.stream().anyMatch(u -> u.startsWith("VSC2.VoltageRegulation.Terminal=")), updates::toString);
+    }
+
+    @Test
+    void aBatteryVoltageRegulationCreatedRegulatingIsRecorded() {
+        network.getVoltageLevel("S1VL2").newBattery().setId("B9").setNode(92).setMinP(-10).setMaxP(10)
+                .setTargetP(1).setLocalTargetQ(1).add();
+        List<String> updates = listen();
+        DefaultUpdatingDataframe dataframe = new DefaultUpdatingDataframe(1);
+        dataframe.addSeries("id", true, new TestStringSeries("B9"));
+        dataframe.addSeries("voltage_regulator_on", false, new TestIntSeries(1));
+        dataframe.addSeries("target_v", false, new TestDoubleSeries(401));
+        new VoltageRegulationDataframeAdder().addElements(network, dataframe);
+        assertTrue(isVoltageRegulatorOn(network.getBattery("B9")));
+        assertTrue(updates.contains("B9" + REGULATING_ON), updates::toString);
+    }
+
+    @Test
+    void refusedSwitchOnOfAShuntWithoutDeadbandLeavesNothing() {
+        ShuntCompensator shunt = network.getShuntCompensator("SHUNT");
+        shunt.removeVoltageRegulation();
+        setTargetV(shunt, 401);
+        String before = xiidm(network);
+        List<String> updates = listen();
+        assertThrows(RuntimeException.class, () -> setVoltageRegulatorOn(shunt, true));
+        assertEquals(before, xiidm(network));
+        assertTrue(updates.isEmpty(), updates::toString);
     }
 }
