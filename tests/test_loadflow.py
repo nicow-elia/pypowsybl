@@ -146,6 +146,23 @@ def test_validation():
     assert validation2.svcs['validated']['SVC']
 
 
+def test_svc_validation_without_regulation_mode():
+    """
+    Since powsybl-core 7.5 a regulation added while a network has several variants has no mode in the other ones:
+    the validation shows no mode there (review 21 F9: it failed with a NullPointerException).
+    """
+    n = pp.network.create_four_substations_node_breaker_network()
+    n.create_static_var_compensators(id='SVC9', voltage_level_id='S1VL2', node=90, b_min=-0.01, b_max=0.01)
+    n.clone_variant(n.get_working_variant_id(), 'other')
+    n.update_static_var_compensators(id='SVC9', regulation_mode='VOLTAGE')
+    n.set_working_variant('other')
+    assert n.get_static_var_compensators().loc['SVC9', 'regulation_mode'] == ''
+    pp.loadflow.run_ac(n)
+    validation = pp.loadflow.run_validation(n, [ValidationType.SVCS])
+    assert validation.svcs.loc['SVC9', 'mode'] == ''
+    assert validation.svcs.loc['SVC', 'mode'] == 'VOLTAGE'
+
+
 def test_twt_validation():
     n = pp.network.create_eurostag_tutorial_example1_network()
     pp.loadflow.run_ac(n)
