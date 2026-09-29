@@ -268,6 +268,9 @@ terminal and one target value — next to the element's local voltage and reacti
   ``target_v`` and ``target_q`` shown. Such a switch needs the target of the new mode: the columns of one update are
   applied in the order of the dataframe, so give the target before the switch, or in an earlier update;
 * an update that is refused leaves the element as it was;
+* switching on an element that has no regulation yet (or giving it a first deadband or regulated element) creates
+  one, and that change is recorded like any other (:doc:`network_changes_export`): the change exports carry it, or
+  refuse it when the element has no regulating control in its CGMES model;
 * switching ``voltage_regulator_on`` on for a generator that regulates reactive power at a remote terminal (the former
   ``generatorRemoteReactivePowerControl``) replaces that regulation: its reactive power target is not kept, the
   generator's own ``target_q`` is.

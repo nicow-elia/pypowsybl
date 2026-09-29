@@ -15,9 +15,10 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.Terminal;
 import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.iidm.network.regulation.VoltageRegulation;
-import com.powsybl.iidm.network.regulation.VoltageRegulationBuilder;
 import com.powsybl.iidm.network.regulation.VoltageRegulationHolder;
 import com.powsybl.python.network.NetworkUtil;
+
+import java.util.function.Consumer;
 
 import static com.powsybl.iidm.network.regulation.RegulationMode.REACTIVE_POWER;
 import static com.powsybl.iidm.network.regulation.RegulationMode.VOLTAGE;
@@ -131,7 +132,7 @@ public final class VoltageRegulationColumns {
                 regulation.setRegulating(regulating);
             }
         } else if (regulating) {
-            newRegulation(holder, REACTIVE_POWER, true).build();
+            withNewRegulation(holder, REACTIVE_POWER, created -> created.setRegulating(true));
         }
     }
 
@@ -144,16 +145,21 @@ public final class VoltageRegulationColumns {
      * not have.
      */
     private static void switchRegulation(VoltageRegulationHolder<?> holder, RegulationMode mode, boolean regulating) {
-        VoltageRegulation regulation = holder.getVoltageRegulation();
-        if (regulation == null) {
-            newRegulation(holder, mode, regulating).build(); // one validated step
-            return;
-        }
         double targetV = getTargetV(holder);
         double targetQ = getTargetQ(holder);
         double target = mode == REACTIVE_POWER ? targetQ : targetV;
         if (regulating && Double.isNaN(target)) {
             throw new PowsyblException(nameOf(holder) + ": cannot regulate in mode " + mode + ", its target is undefined (NaN)");
+        }
+        VoltageRegulation regulation = holder.getVoltageRegulation();
+        if (regulation == null) {
+            // without regulation both targets are the local ones, before and after
+            withNewRegulation(holder, mode, created -> {
+                if (regulating) {
+                    created.setRegulating(true);
+                }
+            });
+            return;
         }
         regulation.setMode(mode); // first step that can be refused: nothing changed before it
         if (regulation.isWithTerminal()) {
@@ -170,8 +176,21 @@ public final class VoltageRegulationColumns {
         }
     }
 
-    private static VoltageRegulationBuilder newRegulation(VoltageRegulationHolder<?> holder, RegulationMode mode, boolean regulating) {
-        return holder.newVoltageRegulation().withMode(mode).withRegulating(regulating);
+    /**
+     * The one way this class creates a regulation: in the given mode, not regulating, then {@code change} is applied
+     * through the regulation's setters. Core reports no event for a regulation created by its builder (a regulation
+     * built regulating, or with a deadband, would reach no change recorder and no change export), but it does for the
+     * setters. A refused change removes the regulation again, which leaves the equipment as it was and nothing
+     * recorded.
+     */
+    private static void withNewRegulation(VoltageRegulationHolder<?> holder, RegulationMode mode, Consumer<VoltageRegulation> change) {
+        VoltageRegulation created = holder.newVoltageRegulation().withMode(mode).withRegulating(false).build();
+        try {
+            change.accept(created);
+        } catch (RuntimeException e) {
+            holder.removeVoltageRegulation();
+            throw e;
+        }
     }
 
     private static String nameOf(VoltageRegulationHolder<?> holder) {
@@ -206,7 +225,8 @@ public final class VoltageRegulationColumns {
         }
         VoltageRegulation regulation = holder.getVoltageRegulation();
         if (regulation == null) {
-            newRegulation(holder, VOLTAGE, false).withTerminal(terminal).withTargetValue(holder.getRegulatingTargetV()).build();
+            double target = holder.getRegulatingTargetV();
+            withNewRegulation(holder, VOLTAGE, created -> created.setTerminal(terminal, target));
         } else {
             double target = regulation.getMode() == REACTIVE_POWER ? holder.getRegulatingTargetQ() : holder.getRegulatingTargetV();
             regulation.setTerminal(terminal, target);
@@ -225,7 +245,7 @@ public final class VoltageRegulationColumns {
         if (regulation != null) {
             regulation.setTargetDeadband(targetDeadband);
         } else if (!Double.isNaN(targetDeadband)) {
-            newRegulation(holder, VOLTAGE, false).withTargetDeadband(targetDeadband).build();
+            withNewRegulation(holder, VOLTAGE, created -> created.setTargetDeadband(targetDeadband));
         }
     }
 

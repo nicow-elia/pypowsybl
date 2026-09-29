@@ -66,10 +66,13 @@ public class VoltageRegulationDataframeAdder extends AbstractSimpleAdder {
             boolean on = voltageRegulatorOn.get(row) != 0;
             Terminal terminal = regulatedElement != null ? getTerminal(network, regulatedElement.get(row), batteryId) : null;
             double target = targetV != null ? targetV.get(row) : Double.NaN;
+            boolean created = battery.getVoltageRegulation() == null;
+            // built not regulating: core reports no event for a regulation its builder creates regulating, the
+            // switch-on goes through the setter (review 21 R3-M1)
             if (terminal != null && terminal != battery.getTerminal()) {
                 battery.newVoltageRegulation()
                         .withMode(RegulationMode.VOLTAGE)
-                        .withRegulating(on)
+                        .withRegulating(false)
                         .withTerminal(terminal)
                         .withTargetValue(target)
                         .build();
@@ -79,8 +82,18 @@ public class VoltageRegulationDataframeAdder extends AbstractSimpleAdder {
                 }
                 battery.newVoltageRegulation()
                         .withMode(RegulationMode.VOLTAGE)
-                        .withRegulating(on)
+                        .withRegulating(false)
                         .build();
+            }
+            if (on) {
+                try {
+                    battery.getVoltageRegulation().setRegulating(true);
+                } catch (RuntimeException e) {
+                    if (created) {
+                        battery.removeVoltageRegulation();
+                    }
+                    throw e;
+                }
             }
         }
     }
