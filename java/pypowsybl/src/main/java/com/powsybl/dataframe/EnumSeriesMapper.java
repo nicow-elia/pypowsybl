@@ -57,6 +57,10 @@ public class EnumSeriesMapper<T, C, E extends Enum<E>> implements SeriesMapper<T
         if (updater == null) {
             throw new UnsupportedOperationException("Series '" + getMetadata().getName() + "' is not modifiable.");
         }
+        if (stringValue.isEmpty() && value.apply(object) == null) {
+            // the empty string is how an undefined value is shown: writing it back unchanged is a no-op
+            return;
+        }
         E enumValue = Enum.valueOf(enumClass, stringValue.toUpperCase());
         updater.accept(object, enumValue);
     }

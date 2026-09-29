@@ -29,6 +29,22 @@ def _four_substations_cgmes(tmp_path: pathlib.Path) -> pp.network.Network:
     return pp.network.load(str(tmp_path))
 
 
+def _svc_without_regulation(tmp_path: pathlib.Path) -> pp.network.Network:
+    """Since core 7.5 a compensator can be created without any regulation: regulation_mode reads ''."""
+    n = pp.network.create_four_substations_node_breaker_network()
+    n.create_static_var_compensators(id='SVC9', voltage_level_id='S1VL2', node=90, b_min=-0.01, b_max=0.01)
+    return n
+
+
+def _svc_mode_in_another_variant(tmp_path: pathlib.Path) -> pp.network.Network:
+    """A regulation created while the network has two variants has no mode in the other one (review 21 F9)."""
+    n = _svc_without_regulation(tmp_path)
+    n.clone_variant(n.get_working_variant_id(), 'other')
+    n.update_static_var_compensators(id='SVC9', regulation_mode='VOLTAGE')
+    n.set_working_variant('other')
+    return n
+
+
 # name -> (factory, whether the network comes from CGMES, i.e. whether a change of it can be exported as SSH)
 NETWORKS = {
     'four_substations': (lambda tmp: pp.network.create_four_substations_node_breaker_network(), False),
@@ -42,6 +58,8 @@ NETWORKS = {
     'ieee14': (lambda tmp: pp.network.create_ieee14(), False),
     'battery': (lambda tmp: pp.network.load(TEST_DIR / 'battery.xiidm'), False),
     'dc_vsc': (lambda tmp: pp.network.create_dc_detailed_vsc_symmetrical_monopole_network(), False),
+    'svc_without_regulation': (_svc_without_regulation, False),
+    'svc_mode_in_another_variant': (_svc_mode_in_another_variant, False),
 }
 
 # element dataframe -> its regulation related columns
@@ -238,3 +256,31 @@ def test_svc_regulated_element_keeps_its_target(tmp_path):
     n.update_static_var_compensators(id='SVC', regulated_element_id='GH1')
     assert row(n.get_static_var_compensators(), 'SVC', ['target_v', 'target_q', 'regulated_element_id']) \
            == [401.0, -30.0, 'GH1']
+
+
+# -------------------------------------------------------------------------- review 21 round 2: refused updates
+
+@pytest.mark.parametrize('network, update', [
+    # regulating in voltage mode without reactive power target
+    ('four_substations', lambda n: n.update_static_var_compensators(id='SVC', regulation_mode='REACTIVE_POWER')),
+    # regulating reactive power at a terminal, without voltage target
+    ('four_substations_cgmes', lambda n: n.update_vsc_converter_stations(id='VSC2', voltage_regulator_on=True)),
+])
+def test_refused_mode_switch_leaves_the_network_unchanged(tmp_path, network, update):
+    n = NETWORKS[network][0](tmp_path)
+    xiidm = n.save_to_string()
+    with n.event_recorder() as recorder:
+        with pytest.raises(pp.PyPowsyblError):
+            update(n)
+        assert recorder.events.empty
+    assert n.save_to_string() == xiidm
+
+
+def test_vsc_created_with_regulated_element_and_regulator_off_can_be_switched_on():
+    """Core's adder makes it regulate reactive power at the regulated element, without local reactive target."""
+    n = pp.network.create_four_substations_node_breaker_network()
+    n.create_vsc_converter_stations(id='V9', voltage_level_id='S1VL2', node=98, target_v=403.0, target_q=3.0,
+                                    voltage_regulator_on=False, loss_factor=1.0, regulating_element_id='GH2')
+    assert row(n.get_vsc_converter_stations(), 'V9') == [403.0, 3.0, False, 'GH2']
+    n.update_vsc_converter_stations(id='V9', voltage_regulator_on=True)
+    assert row(n.get_vsc_converter_stations(), 'V9') == [403.0, 3.0, True, 'GH2']
