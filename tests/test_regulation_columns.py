@@ -1,0 +1,237 @@
+#
+# Copyright (c) 2026, Elia Group
+# This Source Code Form is subject to the terms of the Mozilla Public
+# License, v. 2.0. If a copy of the MPL was not distributed with this
+# file, You can obtain one at http://mozilla.org/MPL/2.0/.
+# SPDX-License-Identifier: MPL-2.0
+#
+"""
+The regulation columns of the dataframes (target_v, target_q, voltage_regulator_on, regulation_mode, regulating,
+regulated_element_id, ...) since powsybl-core 7.5, where they all live in one VoltageRegulation per equipment.
+
+They must keep behaving as the independent attributes they were before: writing a dataframe back unchanged changes
+nothing, and the order in which the columns of one update are applied does not matter.
+"""
+import pathlib
+
+import pandas as pd
+import pytest
+
+import pypowsybl as pp
+import pypowsybl.loadflow as lf
+
+TEST_DIR = pathlib.Path(__file__).parent
+DATA_DIR = TEST_DIR.parent / 'data'
+
+
+def _four_substations_cgmes(tmp_path: pathlib.Path) -> pp.network.Network:
+    pp.network.create_four_substations_node_breaker_network().save(str(tmp_path / 'four'), format='CGMES')
+    return pp.network.load(str(tmp_path))
+
+
+# name -> (factory, whether the network comes from CGMES, i.e. whether a change of it can be exported as SSH)
+NETWORKS = {
+    'four_substations': (lambda tmp: pp.network.create_four_substations_node_breaker_network(), False),
+    'four_substations_extensions':
+        (lambda tmp: pp.network.create_four_substations_node_breaker_network_with_extensions(), False),
+    'four_substations_cgmes': (_four_substations_cgmes, True),
+    'micro_grid_be': (lambda tmp: pp.network.create_micro_grid_be_network(), True),
+    'micro_grid_nl': (lambda tmp: pp.network.create_micro_grid_nl_network(), True),
+    'cgmes_full': (lambda tmp: pp.network.load(DATA_DIR / 'CGMES_Full.zip'), True),
+    'eurostag': (lambda tmp: pp.network.create_eurostag_tutorial_example1_network(), False),
+    'ieee14': (lambda tmp: pp.network.create_ieee14(), False),
+    'battery': (lambda tmp: pp.network.load(TEST_DIR / 'battery.xiidm'), False),
+    'dc_vsc': (lambda tmp: pp.network.create_dc_detailed_vsc_symmetrical_monopole_network(), False),
+}
+
+# element dataframe -> its regulation related columns
+REGULATION_COLUMNS = {
+    'generators': ['target_v', 'target_q', 'voltage_regulator_on', 'regulated_element_id'],
+    'batteries': ['target_p', 'target_q'],
+    'vsc_converter_stations': ['target_v', 'target_q', 'voltage_regulator_on', 'regulated_element_id'],
+    'static_var_compensators': ['target_v', 'target_q', 'regulation_mode', 'regulating', 'regulated_element_id'],
+    'shunt_compensators': ['voltage_regulation_on', 'target_v', 'target_deadband'],
+    'ratio_tap_changers': ['regulating', 'target_v', 'target_deadband', 'regulated_side'],
+    'phase_tap_changers': ['regulation_mode', 'regulation_value', 'target_deadband', 'regulating', 'regulated_side'],
+    'voltage_source_converters': ['voltage_regulator_on', 'target_v_ac', 'target_q'],
+}
+# extension -> its regulation related columns (views on the VoltageRegulation since core 7.5)
+EXTENSION_COLUMNS = {
+    'voltageRegulation': ['voltage_regulator_on', 'target_v', 'regulated_element_id'],
+    'voltagePerReactivePowerControl': ['slope'],
+}
+
+SNAPSHOT_DATAFRAMES = ['buses', 'generators', 'loads', 'batteries', 'shunt_compensators', 'static_var_compensators',
+                       'vsc_converter_stations', 'lcc_converter_stations', 'hvdc_lines', 'lines',
+                       '2_windings_transformers', '3_windings_transformers', 'ratio_tap_changers',
+                       'phase_tap_changers', 'boundary_lines', 'voltage_source_converters']
+
+
+def snapshot(n: pp.network.Network) -> dict:
+    """Every dataframe of the network a regulation change could show in."""
+    frames = {name: getattr(n, 'get_' + name)(all_attributes=True) for name in SNAPSHOT_DATAFRAMES}
+    for extension in EXTENSION_COLUMNS:
+        frames[extension] = n.get_extensions(extension)
+    return frames
+
+
+def assert_unchanged(before: dict, after: dict, what: str) -> None:
+    for name, frame in before.items():
+        try:
+            pd.testing.assert_frame_equal(frame, after[name])
+        except AssertionError as e:
+            raise AssertionError(f'{what} changed the {name} dataframe: {e}') from e
+
+
+def selections(columns: list) -> list:
+    """Each column alone, then all of them in one update."""
+    return [[c] for c in columns] + [columns]
+
+
+def regulation_frames(n: pp.network.Network) -> list:
+    """(name, regulation columns, current values, update function) of each non empty regulation dataframe."""
+    frames = []
+    for kind, columns in REGULATION_COLUMNS.items():
+        frame = getattr(n, 'get_' + kind)(all_attributes=True)
+        if kind in ('ratio_tap_changers', 'phase_tap_changers'):
+            # the updaters of the tap changers only address two windings transformers (pre-existing)
+            frame = frame[frame.index.isin(n.get_2_windings_transformers().index)]
+        frames.append((kind, columns, frame, getattr(n, 'update_' + kind)))
+    for extension, columns in EXTENSION_COLUMNS.items():
+        frames.append((extension, columns, n.get_extensions(extension),
+                       lambda df, name=extension: n.update_extensions(name, df)))
+    return [f for f in frames if not f[2].empty]
+
+
+@pytest.mark.parametrize('network', NETWORKS)
+def test_write_back_unchanged_regulation_columns(tmp_path, network):
+    """
+    Writing the regulation columns back unchanged, each alone and all in one update, changes no dataframe and not
+    even the IIDM serialisation, and a network imported from CGMES can still export the (empty) change as SSH.
+    """
+    factory, from_cgmes = NETWORKS[network]
+    n = factory(tmp_path)
+    xiidm = n.save_to_string()
+    for kind, columns, frame, update in regulation_frames(n):
+        for selection in selections(columns):
+            what = f'writing back {selection} of the {kind} of {network}'
+            before = snapshot(n)
+            with n.event_recorder() as recorder:
+                update(frame[selection])
+                if from_cgmes:
+                    recorder.to_ssh()
+            assert_unchanged(before, snapshot(n), what)
+            assert n.save_to_string() == xiidm, what + ' changed the IIDM serialisation'
+    if from_cgmes:
+        n.save(str(tmp_path / 'export'), format='CGMES')
+
+
+def test_write_back_unchanged_regulated_element_with_several_variants():
+    n = pp.network.create_four_substations_node_breaker_network()
+    n.clone_variant(n.get_working_variant_id(), 'other')
+    for kind in ('generators', 'vsc_converter_stations', 'static_var_compensators'):
+        frame = getattr(n, 'get_' + kind)()
+        before = snapshot(n)
+        getattr(n, 'update_' + kind)(frame[['regulated_element_id']])
+        assert_unchanged(before, snapshot(n), f'writing back the regulated elements of the {kind}')
+
+
+# ------------------------------------------------------------------------------------ the scenarios of review 21 F1
+
+COLUMNS = ['target_v', 'target_q', 'voltage_regulator_on', 'regulated_element_id']
+
+
+def row(frame: pd.DataFrame, element_id: str, columns=None) -> list:
+    return frame.loc[element_id, columns or COLUMNS].tolist()
+
+
+def test_vsc_target_and_regulated_element_in_one_update():
+    """F1 b: the target written in the same update as the regulated element must not be lost."""
+    n = pp.network.create_four_substations_node_breaker_network()
+    n.update_vsc_converter_stations(id='VSC2', target_v=1.0, target_q=2.0, regulated_element_id='VSC1')
+    assert row(n.get_vsc_converter_stations(), 'VSC2') == [1.0, 2.0, False, 'VSC1']
+
+
+@pytest.mark.parametrize('columns', [['target_v', 'regulated_element_id'], ['regulated_element_id', 'target_v']])
+def test_vsc_target_and_regulated_element_in_any_column_order(columns):
+    n = pp.network.create_four_substations_node_breaker_network()
+    update = pd.DataFrame({'target_v': [1.0], 'regulated_element_id': ['VSC1']}, index=pd.Index(['VSC2'], name='id'))
+    n.update_vsc_converter_stations(update[columns])
+    assert row(n.get_vsc_converter_stations(), 'VSC2', ['target_v', 'regulated_element_id']) == [1.0, 'VSC1']
+
+
+def test_generator_created_without_regulation_then_regulating_remotely():
+    """F1 c: target and regulated element first, regulator switched on afterwards."""
+    n = pp.network.create_four_substations_node_breaker_network()
+    n.create_generators(id='G9', voltage_level_id='S1VL2', node=91, max_p=10, min_p=0, target_p=5, target_q=1.0,
+                        voltage_regulator_on=False)
+    n.update_generators(id='G9', target_v=392.0, regulated_element_id='GH2')
+    assert row(n.get_generators(), 'G9') == [392.0, 1.0, False, 'GH2']
+    n.update_generators(id='G9', voltage_regulator_on=True)
+    assert row(n.get_generators(), 'G9') == [392.0, 1.0, True, 'GH2']
+
+
+def test_generator_regulated_element_keeps_its_target():
+    n = pp.network.create_four_substations_node_breaker_network()
+    n.update_generators(id='GH1', target_v=390.0, regulated_element_id='GH2')
+    assert row(n.get_generators(), 'GH1', ['target_v', 'regulated_element_id']) == [390.0, 'GH2']
+    n.update_generators(id='GH1', regulated_element_id='GH3')
+    assert row(n.get_generators(), 'GH1', ['target_v', 'regulated_element_id']) == [390.0, 'GH3']
+
+
+def test_vsc_switched_off_then_reactive_setpoint():
+    """F1 d: the station follows its reactive power setpoint, dataframe and load flow as before core 7.5."""
+    n = pp.network.create_four_substations_node_breaker_network()
+    n.update_vsc_converter_stations(id='VSC1', voltage_regulator_on=False, target_q=30.0)
+    assert row(n.get_vsc_converter_stations(), 'VSC1') == [400.0, 30.0, False, 'VSC1']
+    assert lf.run_ac(n)[0].status == lf.ComponentStatus.CONVERGED
+    assert n.get_vsc_converter_stations().loc['VSC1', 'q'] == pytest.approx(-30.0, abs=1e-3)
+
+
+@pytest.mark.xfail(strict=True, reason='powsybl-core: the full CGMES SSH export writes targetQpcc 0 for a VSC station '
+                                       'whose VoltageRegulation does not regulate (review 21 F1 e); fixed in core by '
+                                       'the core engineer, this test then passes and the marker has to go')
+def test_vsc_reactive_setpoint_survives_full_cgmes_export(tmp_path):
+    n = pp.network.create_four_substations_node_breaker_network()
+    n.update_vsc_converter_stations(id='VSC1', voltage_regulator_on=False, target_q=30.0)
+    n.save(str(tmp_path / 'vsc'), format='CGMES')
+    assert pp.network.load(str(tmp_path)).get_vsc_converter_stations().loc['VSC1', 'target_q'] == pytest.approx(30.0)
+
+
+def test_vsc_switched_on_keeps_both_targets(tmp_path):
+    """
+    A station imported from CGMES in reactive power mode regulates its reactive power at a terminal: switching the
+    voltage regulator on moves the regulation to voltage mode with the voltage target shown, and keeps the reactive
+    power target shown.
+    """
+    n = _four_substations_cgmes(tmp_path)
+    before = row(n.get_vsc_converter_stations(), 'VSC2')
+    n.update_vsc_converter_stations(id='VSC2', target_v=401.0)
+    n.update_vsc_converter_stations(id='VSC2', voltage_regulator_on=True)
+    assert row(n.get_vsc_converter_stations(), 'VSC2') == [401.0, before[1], True, before[3]]
+    n.update_vsc_converter_stations(id='VSC2', voltage_regulator_on=False)
+    assert row(n.get_vsc_converter_stations(), 'VSC2') == [401.0, before[1], False, before[3]]
+
+
+SVC_COLUMNS = ['target_v', 'target_q', 'regulation_mode', 'regulating', 'regulated_element_id']
+
+
+@pytest.mark.parametrize('network', ['four_substations', 'four_substations_cgmes'])
+def test_svc_mode_switch_keeps_both_targets(tmp_path, network):
+    n = NETWORKS[network][0](tmp_path)
+    n.update_static_var_compensators(id='SVC', target_v=401.0, target_q=-30.0)
+    before = row(n.get_static_var_compensators(), 'SVC', SVC_COLUMNS)
+    other = 'REACTIVE_POWER' if before[2] == 'VOLTAGE' else 'VOLTAGE'
+    n.update_static_var_compensators(id='SVC', regulation_mode=other)
+    assert row(n.get_static_var_compensators(), 'SVC', SVC_COLUMNS) == [401.0, -30.0, other] + before[3:]
+    n.update_static_var_compensators(id='SVC', regulation_mode=before[2])
+    assert row(n.get_static_var_compensators(), 'SVC', SVC_COLUMNS) == [401.0, -30.0] + before[2:]
+
+
+def test_svc_regulated_element_keeps_its_target(tmp_path):
+    n = _four_substations_cgmes(tmp_path)
+    n.update_static_var_compensators(id='SVC', target_q=-30.0, target_v=401.0)
+    n.update_static_var_compensators(id='SVC', regulation_mode='REACTIVE_POWER')
+    n.update_static_var_compensators(id='SVC', regulated_element_id='GH1')
+    assert row(n.get_static_var_compensators(), 'SVC', ['target_v', 'target_q', 'regulated_element_id']) \
+           == [401.0, -30.0, 'GH1']
