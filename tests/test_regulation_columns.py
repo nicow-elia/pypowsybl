@@ -206,9 +206,12 @@ def test_vsc_switched_on_keeps_both_targets(tmp_path):
     """
     n = _four_substations_cgmes(tmp_path)
     before = row(n.get_vsc_converter_stations(), 'VSC2')
-    n.update_vsc_converter_stations(id='VSC2', target_v=401.0)
-    n.update_vsc_converter_stations(id='VSC2', voltage_regulator_on=True)
-    assert row(n.get_vsc_converter_stations(), 'VSC2') == [401.0, before[1], True, before[3]]
+    with n.event_recorder() as recorder:
+        n.update_vsc_converter_stations(id='VSC2', target_v=401.0)
+        n.update_vsc_converter_stations(id='VSC2', voltage_regulator_on=True)
+        assert row(n.get_vsc_converter_stations(), 'VSC2') == [401.0, before[1], True, before[3]]
+        # CGMES has the switch to voltage control: qPccControl voltagePcc with its target
+        assert 'voltagePcc' in recorder.to_ssh()
     n.update_vsc_converter_stations(id='VSC2', voltage_regulator_on=False)
     assert row(n.get_vsc_converter_stations(), 'VSC2') == [401.0, before[1], False, before[3]]
 

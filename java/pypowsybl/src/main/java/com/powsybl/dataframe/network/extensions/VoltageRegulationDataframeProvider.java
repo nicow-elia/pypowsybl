@@ -12,6 +12,7 @@ import com.powsybl.commons.PowsyblException;
 import com.powsybl.dataframe.network.ExtensionInformation;
 import com.powsybl.dataframe.network.NetworkDataframeMapper;
 import com.powsybl.dataframe.network.NetworkDataframeMapperBuilder;
+import com.powsybl.dataframe.network.VoltageRegulationColumns;
 import com.powsybl.dataframe.network.adders.NetworkElementAdder;
 import com.powsybl.iidm.network.*;
 import com.powsybl.iidm.network.regulation.RegulationMode;
@@ -71,35 +72,12 @@ public class VoltageRegulationDataframeProvider extends AbstractSingleDataframeN
     public NetworkDataframeMapper createMapper() {
         return NetworkDataframeMapperBuilder.ofStream(this::itemsStream, this::getOrThrow)
                 .stringsIndex("id", Battery::getId)
-                .booleans("voltage_regulator_on", battery -> battery.isRegulatingWithMode(RegulationMode.VOLTAGE),
-                        VoltageRegulationDataframeProvider::setVoltageRegulatorOn)
-                .doubles("target_v", (battery, context) -> battery.getRegulatingTargetV(),
-                        (battery, targetV, context) -> setTargetV(battery, targetV))
-                .strings("regulated_element_id", VoltageRegulationDataframeProvider::getRegulatedElementId,
-                        (battery, id) -> battery.getVoltageRegulation()
-                                .setTerminal(getTerminal(battery.getNetwork(), id, battery.getId()), battery.getRegulatingTargetV()))
+                .booleans("voltage_regulator_on", VoltageRegulationColumns::isVoltageRegulatorOn, VoltageRegulationColumns::setVoltageRegulatorOn)
+                .doubles("target_v", (battery, context) -> VoltageRegulationColumns.getTargetV(battery),
+                        (battery, targetV, context) -> VoltageRegulationColumns.setTargetV(battery, targetV))
+                .strings("regulated_element_id", VoltageRegulationColumns::getRegulatedElementId,
+                        (battery, id) -> VoltageRegulationColumns.setRegulatingTerminal(battery, getTerminal(battery.getNetwork(), id, battery.getId())))
                 .build();
-    }
-
-    private static void setVoltageRegulatorOn(Battery battery, boolean on) {
-        VoltageRegulation regulation = battery.getVoltageRegulation();
-        if (on) {
-            regulation.setMode(RegulationMode.VOLTAGE);
-        }
-        regulation.setRegulating(on);
-    }
-
-    private static void setTargetV(Battery battery, double targetV) {
-        if (battery.hasRegulatingTerminal()) {
-            battery.getVoltageRegulation().setTargetValue(targetV);
-        } else {
-            battery.setLocalTargetV(targetV);
-        }
-    }
-
-    private static String getRegulatedElementId(Battery battery) {
-        Terminal terminal = battery.getRegulatingTerminal();
-        return terminal.getConnectable() != null ? terminal.getConnectable().getId() : null;
     }
 
     @Override

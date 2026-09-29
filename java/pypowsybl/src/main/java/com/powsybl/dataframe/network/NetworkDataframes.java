@@ -333,13 +333,15 @@ public final class NetworkDataframes {
                 .doubles(MAX_Q_AT_P, getPerUnitMaxQ(getOppositeP()), false)
                 .doubles("rated_s", (g, context) -> g.getRatedS(), (g, ratedS, context) -> g.setRatedS(ratedS))
                 .strings("reactive_limits_kind", NetworkDataframes::getReactiveLimitsKind)
-                .doubles("target_v", (g, context) -> perUnitTargetV(context, g.getTargetV(), g.getRegulatingTerminal(), g.getTerminal()),
-                    (g, v, context) -> g.setTargetV(unPerUnitTargetV(context, v, g.getRegulatingTerminal(), g.getTerminal())))
-                .doubles("equivalent_local_target_v", (g, context) -> perUnitV(context, g.getEquivalentLocalTargetV(), g.getTerminal()), false)
-                .doubles("target_q", (g, context) -> perUnitPQ(context, g.getTargetQ()), (g, q, context) -> g.setTargetQ(unPerUnitPQ(context, q)))
-                .booleans("voltage_regulator_on", Generator::isVoltageRegulatorOn, Generator::setVoltageRegulatorOn)
-                .strings("regulated_element_id", generator -> NetworkUtil.getRegulatedElementId(generator::getRegulatingTerminal),
-                        (generator, elementId) -> NetworkUtil.setRegulatingTerminal(generator::setRegulatingTerminal, generator.getNetwork(), elementId))
+                .doubles("target_v", (g, context) -> perUnitTargetV(context, VoltageRegulationColumns.getTargetV(g), g.getRegulatingTerminal(), g.getTerminal()),
+                    (g, v, context) -> VoltageRegulationColumns.setTargetV(g, unPerUnitTargetV(context, v, g.getRegulatingTerminal(), g.getTerminal())))
+                // core 7.5: the local target, which is also the target_v of a generator regulating locally (7.4: NaN unless set)
+                .doubles("equivalent_local_target_v", (g, context) -> perUnitV(context, g.getLocalTargetV(), g.getTerminal()), false)
+                .doubles("target_q", (g, context) -> perUnitPQ(context, VoltageRegulationColumns.getTargetQ(g)),
+                    (g, q, context) -> VoltageRegulationColumns.setTargetQ(g, unPerUnitPQ(context, q)))
+                .booleans("voltage_regulator_on", VoltageRegulationColumns::isVoltageRegulatorOn, VoltageRegulationColumns::setVoltageRegulatorOn)
+                .strings("regulated_element_id", VoltageRegulationColumns::getRegulatedElementId,
+                        (generator, elementId) -> VoltageRegulationColumns.setRegulatedElementId(generator, generator.getNetwork(), elementId))
                 .strings(REGULATED_BUS_ID, generator -> getBusId(generator.getRegulatingTerminal()), false)
                 .strings(REGULATED_BUS_BREAKER_BUS_ID, generator -> getBusBreakerViewBusId(generator.getRegulatingTerminal()), false)
                 .doubles("p", getPerUnitP(), setPerUnitP())
@@ -437,7 +439,8 @@ public final class NetworkDataframes {
                 .doubles(MAX_Q_AT_P, getPerUnitMaxQ(getOppositeP()), false)
                 .strings("reactive_limits_kind", NetworkDataframes::getReactiveLimitsKind)
                 .doubles("target_p", (b, context) -> perUnitPQ(context, b.getTargetP()), (b, targetP, context) -> b.setTargetP(unPerUnitPQ(context, targetP)))
-                .doubles("target_q", (b, context) -> perUnitPQ(context, b.getTargetQ()), (b, targetQ, context) -> b.setTargetQ(unPerUnitPQ(context, targetQ)))
+                .doubles("target_q", (b, context) -> perUnitPQ(context, VoltageRegulationColumns.getTargetQ(b)),
+                    (b, targetQ, context) -> VoltageRegulationColumns.setTargetQ(b, unPerUnitPQ(context, targetQ)))
                 .doubles("p", getPerUnitP(), setPerUnitP())
                 .doubles("q", getPerUnitQ(), setPerUnitQ())
                 .doubles("i", (b, context) -> perUnitI(context, b.getTerminal()))
@@ -474,11 +477,11 @@ public final class NetworkDataframes {
                 .ints("max_section_count", ShuntCompensator::getMaximumSectionCount)
                 .ints("section_count", ShuntCompensator::getSectionCount, ShuntCompensator::setSectionCount)
                 .optionalInts("solved_section_count", ShuntCompensator::findSolvedSectionCount)
-                .booleans("voltage_regulation_on", ShuntCompensator::isVoltageRegulatorOn, ShuntCompensator::setVoltageRegulatorOn)
-                .doubles("target_v", (sc, context) -> perUnitTargetV(context, sc.getTargetV(), sc.getRegulatingTerminal(), sc.getTerminal()),
-                    (sc, v, context) -> sc.setTargetV(unPerUnitTargetV(context, v, sc.getRegulatingTerminal(), sc.getTerminal())))
-                .doubles("target_deadband", (sc, context) -> perUnitV(context, sc.getTargetDeadband(), sc.getRegulatingTerminal()),
-                    (sc, tb, context) -> sc.setTargetDeadband(unPerUnitV(context, tb, sc.getRegulatingTerminal())))
+                .booleans("voltage_regulation_on", VoltageRegulationColumns::isVoltageRegulatorOn, VoltageRegulationColumns::setVoltageRegulatorOn)
+                .doubles("target_v", (sc, context) -> perUnitTargetV(context, VoltageRegulationColumns.getTargetV(sc), sc.getRegulatingTerminal(), sc.getTerminal()),
+                    (sc, v, context) -> VoltageRegulationColumns.setTargetV(sc, unPerUnitTargetV(context, v, sc.getRegulatingTerminal(), sc.getTerminal())))
+                .doubles("target_deadband", (sc, context) -> perUnitV(context, VoltageRegulationColumns.getTargetDeadband(sc), sc.getRegulatingTerminal()),
+                    (sc, tb, context) -> VoltageRegulationColumns.setTargetDeadband(sc, unPerUnitV(context, tb, sc.getRegulatingTerminal())))
                 .strings("regulating_bus_id", sc -> getBusId(sc.getRegulatingTerminal()))
                 .doubles("p", getPerUnitP(), setPerUnitP())
                 .doubles("q", getPerUnitQ(), setPerUnitQ())
@@ -828,13 +831,13 @@ public final class NetworkDataframes {
                 .doubles(MIN_Q_AT_P, getPerUnitMinQ(getOppositeP()), false)
                 .doubles(MAX_Q_AT_P, getPerUnitMaxQ(getOppositeP()), false)
                 .strings("reactive_limits_kind", NetworkDataframes::getReactiveLimitsKind)
-                .doubles("target_v", (vsc, context) -> perUnitTargetV(context, vsc.getVoltageSetpoint(), vsc.getRegulatingTerminal(), vsc.getTerminal()),
-                    (vsc, targetV, context) -> vsc.setVoltageSetpoint(unPerUnitTargetV(context, targetV, vsc.getRegulatingTerminal(), vsc.getTerminal())))
-                .doubles("target_q", (vsc, context) -> perUnitPQ(context, vsc.getReactivePowerSetpoint()),
-                    (vsc, targetQ, context) -> vsc.setReactivePowerSetpoint(unPerUnitPQ(context, targetQ)))
-                .booleans("voltage_regulator_on", VscConverterStation::isVoltageRegulatorOn, VscConverterStation::setVoltageRegulatorOn)
-                .strings("regulated_element_id", vsc -> NetworkUtil.getRegulatedElementId(vsc::getRegulatingTerminal),
-                        (vsc, elementId) -> NetworkUtil.setRegulatingTerminal(vsc::setRegulatingTerminal, vsc.getNetwork(), elementId))
+                .doubles("target_v", (vsc, context) -> perUnitTargetV(context, VoltageRegulationColumns.getTargetV(vsc), vsc.getRegulatingTerminal(), vsc.getTerminal()),
+                    (vsc, targetV, context) -> VoltageRegulationColumns.setTargetV(vsc, unPerUnitTargetV(context, targetV, vsc.getRegulatingTerminal(), vsc.getTerminal())))
+                .doubles("target_q", (vsc, context) -> perUnitPQ(context, VoltageRegulationColumns.getTargetQ(vsc)),
+                    (vsc, targetQ, context) -> VoltageRegulationColumns.setTargetQ(vsc, unPerUnitPQ(context, targetQ)))
+                .booleans("voltage_regulator_on", VoltageRegulationColumns::isVoltageRegulatorOn, VoltageRegulationColumns::setVoltageRegulatorOn)
+                .strings("regulated_element_id", VoltageRegulationColumns::getRegulatedElementId,
+                        (vsc, elementId) -> VoltageRegulationColumns.setRegulatedElementId(vsc, vsc.getNetwork(), elementId))
                 .strings(REGULATED_BUS_ID, vsc -> getBusId(vsc.getRegulatingTerminal()), false)
                 .strings(REGULATED_BUS_BREAKER_BUS_ID, vsc -> getBusBreakerViewBusId(vsc.getRegulatingTerminal()), false)
                 .doubles("p", getPerUnitP(), setPerUnitP())
@@ -857,15 +860,14 @@ public final class NetworkDataframes {
                 .strings("name", svc -> svc.getOptionalName().orElse(""), Identifiable::setName)
                 .doubles("b_min", (svc, context) -> svc.getBmin(), (svc, bMin, context) -> svc.setBmin(bMin))
                 .doubles("b_max", (svc, context) -> svc.getBmax(), (svc, bMax, context) -> svc.setBmax(bMax))
-                .doubles("target_v", (svc, context) -> perUnitTargetV(context, svc.getVoltageSetpoint(), svc.getRegulatingTerminal(), svc.getTerminal()),
-                    (svc, targetV, context) -> svc.setVoltageSetpoint(unPerUnitTargetV(context, targetV, svc.getRegulatingTerminal(), svc.getTerminal())))
-                .doubles("target_q", (svc, context) -> perUnitPQ(context, svc.getReactivePowerSetpoint()),
-                    (svc, targetQ, context) -> svc.setReactivePowerSetpoint(unPerUnitPQ(context, targetQ)))
-                .enums("regulation_mode", RegulationMode.class,
-                        StaticVarCompensator::getRegulationMode, StaticVarCompensator::setRegulationMode)
-                .booleans(REGULATING, StaticVarCompensator::isRegulating, StaticVarCompensator::setRegulating)
-                .strings("regulated_element_id", svc -> NetworkUtil.getRegulatedElementId(svc::getRegulatingTerminal),
-                        (svc, elementId) -> NetworkUtil.setRegulatingTerminal(svc::setRegulatingTerminal, svc.getNetwork(), elementId))
+                .doubles("target_v", (svc, context) -> perUnitTargetV(context, VoltageRegulationColumns.getTargetV(svc), svc.getRegulatingTerminal(), svc.getTerminal()),
+                    (svc, targetV, context) -> VoltageRegulationColumns.setTargetV(svc, unPerUnitTargetV(context, targetV, svc.getRegulatingTerminal(), svc.getTerminal())))
+                .doubles("target_q", (svc, context) -> perUnitPQ(context, VoltageRegulationColumns.getTargetQ(svc)),
+                    (svc, targetQ, context) -> VoltageRegulationColumns.setTargetQ(svc, unPerUnitPQ(context, targetQ)))
+                .enums("regulation_mode", RegulationMode.class, VoltageRegulationColumns::getMode, VoltageRegulationColumns::setMode)
+                .booleans(REGULATING, StaticVarCompensator::isRegulating, VoltageRegulationColumns::setRegulating)
+                .strings("regulated_element_id", VoltageRegulationColumns::getRegulatedElementId,
+                        (svc, elementId) -> VoltageRegulationColumns.setRegulatedElementId(svc, svc.getNetwork(), elementId))
                 .strings(REGULATED_BUS_ID, svc -> getBusId(svc.getRegulatingTerminal()), false)
                 .strings(REGULATED_BUS_BREAKER_BUS_ID, svc -> getBusBreakerViewBusId(svc.getRegulatingTerminal()), false)
                 .doubles("p", getPerUnitP(), setPerUnitP())
@@ -1056,17 +1058,17 @@ public final class NetworkDataframes {
                         (conv, dcConnected2) -> conv.getDcTerminal2().setConnected(dcConnected2))
                 .strings("pcc_terminal_id", conv -> NetworkUtil.getRegulatedElementId(conv::getPccTerminal),
                         (conv, elementId) -> NetworkUtil.setPccTerminal(conv::setPccTerminal, conv.getNetwork(), elementId))
-                .booleans("voltage_regulator_on", VoltageSourceConverter::isVoltageRegulatorOn, VoltageSourceConverter::setVoltageRegulatorOn)
+                .booleans("voltage_regulator_on", VoltageRegulationColumns::isVoltageRegulatorOn, VoltageRegulationColumns::setVoltageRegulatorOn)
                 .enums("control_mode", AcDcConverter.ControlMode.class, VoltageSourceConverter::getControlMode, VoltageSourceConverter::setControlMode)
                 .doubles("target_v_dc", (conv, context) -> perUnitV(context, conv.getTargetVdc(), conv.getDcTerminal1()),
                         //we supposed that NominalV is the same for both DC nodes connected to the converter
                         (conv, targetV, context) -> conv.setTargetVdc(unPerUnitV(context, targetV, conv.getDcTerminal1())))
-                .doubles("target_v_ac", (conv, context) -> perUnitV(context, conv.getVoltageSetpoint(), conv.getTerminal1()),
-                        (conv, targetV, context) -> conv.setVoltageSetpoint(unPerUnitV(context, targetV, conv.getTerminal1())))
+                .doubles("target_v_ac", (conv, context) -> perUnitV(context, VoltageRegulationColumns.getTargetV(conv), conv.getTerminal1()),
+                        (conv, targetV, context) -> VoltageRegulationColumns.setTargetV(conv, unPerUnitV(context, targetV, conv.getTerminal1())))
                 .doubles("target_p", (conv, context) -> perUnitPQ(context, conv.getTargetP()),
                         (conv, targetP, context) -> conv.setTargetP(unPerUnitPQ(context, targetP)))
-                .doubles("target_q", (conv, context) -> perUnitPQ(context, conv.getReactivePowerSetpoint()),
-                        (conv, targetQ, context) -> conv.setReactivePowerSetpoint(unPerUnitPQ(context, targetQ)))
+                .doubles("target_q", (conv, context) -> perUnitPQ(context, VoltageRegulationColumns.getTargetQ(conv)),
+                        (conv, targetQ, context) -> VoltageRegulationColumns.setTargetQ(conv, unPerUnitPQ(context, targetQ)))
                 // The core represents the "unbounded" default as -/+ Double.MAX_VALUE; expose it as -/+ infinity
                 // Non-default columns, so absent from the default dataframe.
                 .doubles("min_p",
@@ -1365,7 +1367,11 @@ public final class NetworkDataframes {
 
         @Override
         public void setRtcRegulatedSide(String regulatedSide) {
-            getRtc().setRegulationTerminal(getBranchTerminal(twt, regulatedSide));
+            Terminal terminal = getBranchTerminal(twt, regulatedSide);
+            // core 7.5 creates a regulation for any terminal written, even the unchanged one of a tap changer without
+            if (terminal != getRtc().getRegulationTerminal()) {
+                getRtc().setRegulationTerminal(terminal);
+            }
         }
 
         @Override
@@ -1499,13 +1505,24 @@ public final class NetworkDataframes {
                 .doubles("target_v", (row, context) -> getTransformerTargetV(row.getRtc(), context),
                         (row, targetV, context) -> setTransformerTargetV(row.getRtc(), targetV, context))
                 .doubles("target_deadband", (row, context) -> row.getRtc().getTargetDeadband(),
-                    (row, v, context) -> row.getRtc().setTargetDeadband(v))
+                    (row, v, context) -> setTransformerTargetDeadband(row.getRtc(), v))
                 .strings("regulating_bus_id", row -> getBusId(row.getRtc().getRegulationTerminal()))
                 .strings("regulated_side", TapChangerRow::getRtcRegulatedSide, TapChangerRow::setRtcRegulatedSide, false)
                 .build();
     }
 
+    // The targets of a ratio tap changer are written only when they change: core 7.5 creates a regulation for any
+    // value written, even the unchanged NaN of a tap changer without regulation.
+    private static void setTransformerTargetDeadband(RatioTapChanger rtc, double targetDeadband) {
+        if (Double.compare(rtc.getTargetDeadband(), targetDeadband) != 0) {
+            rtc.setTargetDeadband(targetDeadband);
+        }
+    }
+
     private static void setTransformerTargetV(RatioTapChanger rtc, double targetV, NetworkDataframeContext context) {
+        if (Double.compare(getTransformerTargetV(rtc, context), targetV) == 0) {
+            return;
+        }
         if (context.isPerUnit()) {
             if (rtc.getRegulationTerminal() != null) {
                 rtc.setTargetV(unPerUnitV(context, targetV, rtc.getRegulationTerminal()));
