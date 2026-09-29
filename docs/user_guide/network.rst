@@ -251,6 +251,38 @@ You can check that the load data has indeed been updated:
     LOAD  500.0  300.0
 
 
+Voltage regulation columns
+--------------------------
+
+Since powsybl-core 7.5 the regulation of a generator, battery, VSC converter station, static var compensator, shunt
+compensator or voltage source converter is one *voltage regulation* — a mode, a regulating flag, a regulated
+terminal and one target value — next to the element's local voltage and reactive power targets. The columns
+``target_v``, ``target_q``, ``voltage_regulator_on`` (``voltage_regulation_on`` for shunts), ``regulation_mode``,
+``regulating`` and ``regulated_element_id`` still behave as independent values:
+
+* a value written back unchanged changes nothing, so a dataframe read, partly modified and written back only changes
+  what was modified;
+* the columns of one update may come in any order: a regulated element keeps the target shown in ``target_v`` (in
+  ``target_q`` for a regulation in reactive power mode);
+* switching ``voltage_regulator_on`` on, or changing the ``regulation_mode`` of a static var compensator, keeps the
+  ``target_v`` and ``target_q`` shown.
+
+Known limitations with powsybl-core 7.5:
+
+* The regulated element (``regulated_element_id``, and ``regulated_side`` of tap changers) cannot be changed while the
+  network has several variants: core refuses it ("Cannot set terminal when there are multiple variants"). Writing
+  the unchanged value back is fine.
+* A VSC converter station has no column for its regulation mode: ``voltage_regulator_on=False`` clears the
+  regulating flag (the station then follows ``target_q``), ``True`` moves it to voltage control.
+* ``equivalent_local_target_v`` of a generator is its local voltage target, which for a generator regulating locally
+  is its ``target_v`` (before core 7.5: NaN unless set explicitly).
+* The extension ``voltagePerReactivePowerControl`` of static var compensators is a view on the regulation: creating
+  it sets ``regulation_mode`` to ``VOLTAGE_PER_REACTIVE_POWER``, another ``regulation_mode`` makes it disappear, and
+  removing it sets the mode back to ``VOLTAGE``.
+* IIDM files written with the namespace ``iidm/1_18`` by a build on powsybl-core 7.4 snapshots cannot be read: core
+  7.5 redefined that version. Re-save them from the old build with ``{'iidm.export.xml.version': '1.17'}``.
+
+
 Basic topology changes
 ----------------------
 

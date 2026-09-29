@@ -272,8 +272,10 @@ connecting or disconnecting a terminal, and the state values ``p``, ``q``, ``v``
 **running a load flow inside the recorded block** produces unsupported changes, since a load flow writes its results
 through the ordinary setters. Regulation changes CGMES has no place for are unsupported as well: the regulation
 mode or regulating terminal of a generator, shunt, static var compensator or ratio tap changer (equipment data), and
-``voltage_regulator_on=False`` on a VSC converter station, since a CGMES ``VsConverter`` has no control flag
-(switch the station's regulation mode instead).
+``voltage_regulator_on=False`` on a VSC converter station, since a CGMES ``VsConverter`` has no control flag: the
+import makes every converter regulate in the mode its ``qPccControl`` names. A change of a VSC station's targets is
+supported, and so is ``voltage_regulator_on=True``, which moves a station that controls its reactive power to voltage
+control; there is no column to move a station the other way.
 
 The ``unsupported`` argument decides what happens then. ``'raise'``, the default, refuses to write anything and
 names the change; ``'ignore'`` skips it and logs a warning:
