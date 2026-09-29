@@ -310,7 +310,7 @@ public final class Dataframes {
                 .strings("limit_name", p -> Objects.toString(p.getLimitName(), ""))
                 .doubles("limit", LimitViolation::getLimit)
                 .ints("acceptable_duration", LimitViolation::getAcceptableDuration)
-                .doubles("limit_reduction", LimitViolation::getLimitReduction)
+                .doubles("limit_reduction", LimitViolation::getLimitScaling)
                 .doubles("value", LimitViolation::getValue)
                 .strings("side", p -> Objects.toString(p.getSide(), ""))
                 .build();
@@ -590,7 +590,7 @@ public final class Dataframes {
                 .strings("limit_name", p -> Objects.toString(p.getLimitName(), ""))
                 .doubles("limit", LimitViolation::getLimit)
                 .ints("acceptable_duration", LimitViolation::getAcceptableDuration)
-                .doubles("limit_reduction", LimitViolation::getLimitReduction)
+                .doubles("limit_reduction", LimitViolation::getLimitScaling)
                 .doubles("value", LimitViolation::getValue)
                 .strings("side", p -> Objects.toString(p.getSide(), ""))
                 .build();
