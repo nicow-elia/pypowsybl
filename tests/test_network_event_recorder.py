@@ -293,6 +293,22 @@ def test_load_flow_inside_block_is_unsupported(sender):
     assert load_id in ssh
 
 
+def test_vsc_regulation_switched_off_is_unsupported(tmp_path):
+    """
+    Since powsybl-core 7.5 a VSC station regulates through its VoltageRegulation; ``voltage_regulator_on=False`` only
+    clears the regulating flag, and a CGMES VsConverter has no control flag to carry that. The change export refuses
+    it instead of writing a state the receiver would read back differently (users switch the mode instead).
+    """
+    pp.network.create_four_substations_node_breaker_network().save(str(tmp_path / 'vsc'), format='CGMES')
+    n = pp.network.load(str(tmp_path))
+    with n.event_recorder() as recorder:
+        n.update_vsc_converter_stations(id='VSC1', voltage_regulator_on=False, target_q=30.0)
+        # the canonical event of the regulation, then the echo of the deprecated setter
+        assert list(recorder.events['attribute'])[:2] == ['VoltageRegulation.isRegulating', 'voltageRegulatorOn']
+        with pytest.raises(PyPowsyblError, match='no control flag'):
+            recorder.to_ssh()
+
+
 # --------------------------------------------------------------------------------------------------- metadata
 
 def test_metadata(sender):

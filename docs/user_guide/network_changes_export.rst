@@ -270,7 +270,10 @@ Everything else is *unsupported*: creating or removing elements, adding or remov
 duration, selecting another limit set, changing equipment attributes such as ``max_p`` or a transformer impedance,
 connecting or disconnecting a terminal, and the state values ``p``, ``q``, ``v`` and ``angle`` — which is why
 **running a load flow inside the recorded block** produces unsupported changes, since a load flow writes its results
-through the ordinary setters.
+through the ordinary setters. Regulation changes CGMES has no place for are unsupported as well: the regulation
+mode or regulating terminal of a generator, shunt, static var compensator or ratio tap changer (equipment data), and
+``voltage_regulator_on=False`` on a VSC converter station, since a CGMES ``VsConverter`` has no control flag
+(switch the station's regulation mode instead).
 
 The ``unsupported`` argument decides what happens then. ``'raise'``, the default, refuses to write anything and
 names the change; ``'ignore'`` skips it and logs a warning:
