@@ -14,6 +14,7 @@ import com.powsybl.dataframe.update.TestDoubleSeries;
 import com.powsybl.dataframe.update.TestIntSeries;
 import com.powsybl.dataframe.update.TestStringSeries;
 import com.powsybl.iidm.network.*;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
 import com.powsybl.iidm.network.test.FourSubstationsNodeBreakerFactory;
 import com.powsybl.iidm.serde.NetworkSerDe;
 import org.junit.jupiter.api.BeforeEach;
@@ -284,6 +285,60 @@ class VoltageRegulationColumnsTest {
         String before = xiidm(network);
         List<String> updates = listen();
         assertThrows(RuntimeException.class, () -> setVoltageRegulatorOn(shunt, true));
+        assertEquals(before, xiidm(network));
+        assertTrue(updates.isEmpty(), updates::toString);
+    }
+    // --------------------------------------- closing review C-M1: a VSC station switched off regulates reactive power
+
+    @Test
+    void vscSwitchedOffRegulatesReactivePowerAtItsOwnTerminal() {
+        VscConverterStation vsc1 = network.getVscConverterStation("VSC1");
+        setTargetQ(vsc1, 33);
+        List<String> updates = listen();
+        setVoltageRegulatorOn(vsc1, false);
+        // the columns read as before core 7.5
+        assertFalse(isVoltageRegulatorOn(vsc1));
+        assertEquals(400, getTargetV(vsc1));
+        assertEquals(33, getTargetQ(vsc1));
+        assertEquals("VSC1", getRegulatedElementId(vsc1));
+        // what CGMES can carry: reactive power regulation at the station's own terminal
+        VoltageRegulation regulation = vsc1.getVoltageRegulation();
+        assertEquals(REACTIVE_POWER, regulation.getMode());
+        assertTrue(regulation.isRegulating());
+        assertSame(vsc1.getTerminal(), regulation.getTerminal());
+        assertEquals(33, regulation.getTargetValue());
+        assertTrue(updates.contains("VSC1.VoltageRegulation.RegulationMode=REACTIVE_POWER"), updates::toString);
+
+        String off = xiidm(network);
+        setVoltageRegulatorOn(vsc1, false);
+        assertEquals(off, xiidm(network));
+
+        setVoltageRegulatorOn(vsc1, true);
+        assertTrue(isVoltageRegulatorOn(vsc1));
+        assertEquals(400, getTargetV(vsc1));
+        assertEquals(33, getTargetQ(vsc1));
+        setVoltageRegulatorOn(vsc1, false);
+        assertEquals(REACTIVE_POWER, vsc1.getVoltageRegulation().getMode());
+        assertEquals(33, getTargetQ(vsc1));
+    }
+
+    @Test
+    void vscSwitchedOffWithSeveralVariantsOnlyStopsRegulating() {
+        // core cannot set a terminal with several variants: the flag is cleared as before
+        network.getVariantManager().cloneVariant(VariantManagerConstants.INITIAL_VARIANT_ID, "other");
+        VscConverterStation vsc1 = network.getVscConverterStation("VSC1");
+        setVoltageRegulatorOn(vsc1, false);
+        assertFalse(isVoltageRegulatorOn(vsc1));
+        assertEquals(VOLTAGE, vsc1.getVoltageRegulation().getMode());
+    }
+
+    @Test
+    void refusedVscSwitchOffLeavesTheNetworkUnchanged() {
+        VscConverterStation vsc1 = network.getVscConverterStation("VSC1");
+        vsc1.setLocalTargetQ(Double.NaN);
+        String before = xiidm(network);
+        List<String> updates = listen();
+        assertThrows(RuntimeException.class, () -> setVoltageRegulatorOn(vsc1, false));
         assertEquals(before, xiidm(network));
         assertTrue(updates.isEmpty(), updates::toString);
     }

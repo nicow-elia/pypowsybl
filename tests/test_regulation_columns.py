@@ -334,3 +334,60 @@ def test_battery_voltage_regulation_created_regulating_is_recorded():
         n.create_extensions('voltageRegulation', id=battery, voltage_regulator_on=True, target_v=401.0)
         assert 'VoltageRegulation.isRegulating' in list(recorder.events['attribute'])
     assert n.get_extensions('voltageRegulation').loc[battery, 'voltage_regulator_on']
+
+
+# ---------------------------------- closing review C-M1: VSC stations between voltage and reactive power regulation
+
+KEEP_PREVIOUS = {'iidm.import.cgmes.use-previous-values-during-update': 'true'}
+NO_SUPERSEDES_CHECK = {'iidm.import.cgmes.diff.check-supersedes': 'false'}
+
+
+def _apply(recorder, route: str, receiver: pp.network.Network, parameters=None) -> None:
+    if route == 'ssh':
+        receiver.update_from_string(recorder.to_ssh(), 'update_SSH.xml', parameters=KEEP_PREVIOUS)
+    else:
+        receiver.update_from_string(recorder.to_cgmes_diff(), 'update_SSH_DIFF.xml', parameters=parameters)
+
+
+def _vsc_columns(n: pp.network.Network) -> list:
+    return n.get_vsc_converter_stations()[COLUMNS].values.tolist()
+
+
+@pytest.mark.parametrize('route', ['ssh', 'diff'])
+def test_vsc_moves_between_voltage_and_reactive_power_through_the_change_export(tmp_path, route):
+    """
+    As on core 7.4 a station switched off follows its target_q, and on again its target_v; since core 7.5 that is a
+    reactive power regulation at the station's own terminal, which CGMES carries (qPccControl reactivePcc).
+    """
+    sender = _four_substations_cgmes(tmp_path)
+    receiver = _four_substations_cgmes(tmp_path)
+    original = _vsc_columns(receiver)
+    with sender.event_recorder() as recorder:
+        sender.update_vsc_converter_stations(id='VSC1', voltage_regulator_on=False, target_q=33.0)
+        assert row(sender.get_vsc_converter_stations(), 'VSC1') == [400.0, 33.0, False, 'VSC1']
+        _apply(recorder, route, receiver)
+        assert _vsc_columns(receiver) == _vsc_columns(sender)
+        recorder.clear()
+
+        sender.update_vsc_converter_stations(id='VSC1', target_v=401.0, voltage_regulator_on=True)
+        _apply(recorder, route, receiver, NO_SUPERSEDES_CHECK)
+        assert _vsc_columns(receiver) == _vsc_columns(sender)
+        recorder.clear()
+
+        # back to where it started: the receiver too
+        sender.update_vsc_converter_stations(id='VSC1', target_v=400.0, target_q=500.0)
+        _apply(recorder, route, receiver, NO_SUPERSEDES_CHECK)
+    assert _vsc_columns(receiver) == original
+
+
+@pytest.mark.parametrize('route', ['ssh', 'diff'])
+def test_vsc_switched_on_and_off_again_is_exported(tmp_path, route):
+    """VSC2 regulates reactive power after the CGMES import: on, then off again, is exported on both routes."""
+    sender = _four_substations_cgmes(tmp_path)
+    receiver = _four_substations_cgmes(tmp_path)
+    with sender.event_recorder() as recorder:
+        sender.update_vsc_converter_stations(id='VSC2', target_v=402.0, voltage_regulator_on=True)
+        sender.update_vsc_converter_stations(id='VSC2', voltage_regulator_on=False)
+        assert row(sender.get_vsc_converter_stations(), 'VSC2')[1:3] == [120.0, False]
+        _apply(recorder, route, receiver)
+    assert _vsc_columns(receiver) == _vsc_columns(sender)
