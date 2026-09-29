@@ -15,6 +15,7 @@ import com.powsybl.dataframe.network.extensions.NetworkExtensions;
 import com.powsybl.dataframe.network.extensions.ExtensionDataframeKey;
 import com.powsybl.dataframe.update.UpdatingDataframe;
 import com.powsybl.iidm.network.*;
+import com.powsybl.iidm.network.regulation.RegulationMode;
 import com.powsybl.python.commons.PyPowsyblApiHeader;
 import com.powsybl.python.network.NetworkUtil;
 import com.powsybl.python.network.SideEnum;
@@ -860,7 +861,7 @@ public final class NetworkDataframes {
                     (svc, targetV, context) -> svc.setVoltageSetpoint(unPerUnitTargetV(context, targetV, svc.getRegulatingTerminal(), svc.getTerminal())))
                 .doubles("target_q", (svc, context) -> perUnitPQ(context, svc.getReactivePowerSetpoint()),
                     (svc, targetQ, context) -> svc.setReactivePowerSetpoint(unPerUnitPQ(context, targetQ)))
-                .enums("regulation_mode", StaticVarCompensator.RegulationMode.class,
+                .enums("regulation_mode", RegulationMode.class,
                         StaticVarCompensator::getRegulationMode, StaticVarCompensator::setRegulationMode)
                 .booleans(REGULATING, StaticVarCompensator::isRegulating, StaticVarCompensator::setRegulating)
                 .strings("regulated_element_id", svc -> NetworkUtil.getRegulatedElementId(svc::getRegulatingTerminal),
@@ -1359,22 +1360,22 @@ public final class NetworkDataframes {
 
         @Override
         public String getRtcRegulatedSide() {
-            return NetworkDataframes.getTapChangerRegulatedSide(twt, TwoWindingsTransformer::getRatioTapChanger);
+            return getTerminalSideStr(twt, getRtc().getRegulationTerminal());
         }
 
         @Override
         public void setRtcRegulatedSide(String regulatedSide) {
-            NetworkDataframes.setTapChangerRegulatedSide(twt, regulatedSide, TwoWindingsTransformer::getRatioTapChanger);
+            getRtc().setRegulationTerminal(getBranchTerminal(twt, regulatedSide));
         }
 
         @Override
         public String getPtcRegulatedSide() {
-            return NetworkDataframes.getTapChangerRegulatedSide(twt, TwoWindingsTransformer::getPhaseTapChanger);
+            return getTerminalSideStr(twt, getPtc().getRegulationTerminal());
         }
 
         @Override
         public void setPtcRegulatedSide(String regulatedSide) {
-            NetworkDataframes.setTapChangerRegulatedSide(twt, regulatedSide, TwoWindingsTransformer::getPhaseTapChanger);
+            getPtc().setRegulationTerminal(getBranchTerminal(twt, regulatedSide));
         }
     }
 
@@ -1401,22 +1402,22 @@ public final class NetworkDataframes {
 
         @Override
         public String getRtcRegulatedSide() {
-            return NetworkDataframes.getTapChangerRegulatedSide(twt, side, ThreeWindingsTransformer.Leg::getRatioTapChanger);
+            return getTerminalSideStr(twt, getRtc().getRegulationTerminal());
         }
 
         @Override
         public void setRtcRegulatedSide(String regulatedSide) {
-            NetworkDataframes.setTapChangerRegulatedSide(twt, side, regulatedSide, ThreeWindingsTransformer.Leg::getRatioTapChanger);
+            NetworkDataframes.setTapChangerRegulatedSide(twt, regulatedSide, getRtc()::setRegulationTerminal);
         }
 
         @Override
         public String getPtcRegulatedSide() {
-            return NetworkDataframes.getTapChangerRegulatedSide(twt, side, ThreeWindingsTransformer.Leg::getPhaseTapChanger);
+            return getTerminalSideStr(twt, getPtc().getRegulationTerminal());
         }
 
         @Override
         public void setPtcRegulatedSide(String regulatedSide) {
-            NetworkDataframes.setTapChangerRegulatedSide(twt, side, regulatedSide, ThreeWindingsTransformer.Leg::getPhaseTapChanger);
+            NetworkDataframes.setTapChangerRegulatedSide(twt, regulatedSide, getPtc()::setRegulationTerminal);
         }
     }
 
@@ -1529,25 +1530,12 @@ public final class NetworkDataframes {
         }
     }
 
-    private static <T extends TapChanger<?, ?, ?, ?>> String getTapChangerRegulatedSide(TwoWindingsTransformer transformer, Function<TwoWindingsTransformer, T> tapChangerGetter) {
-        return getTerminalSideStr(transformer, tapChangerGetter.apply(transformer).getRegulationTerminal());
-    }
-
-    private static <T extends TapChanger<?, ?, ?, ?>> void setTapChangerRegulatedSide(TwoWindingsTransformer transformer, String side, Function<TwoWindingsTransformer, T> tapChangerGetter) {
-        tapChangerGetter.apply(transformer).setRegulationTerminal(getBranchTerminal(transformer, side));
-    }
-
-    private static <T extends TapChanger<?, ?, ?, ?>> String getTapChangerRegulatedSide(ThreeWindingsTransformer transformer, ThreeSides side, Function<ThreeWindingsTransformer.Leg, T> tapChangerGetter) {
-        var rtc = tapChangerGetter.apply(transformer.getLeg(side));
-        return getTerminalSideStr(transformer, rtc.getRegulationTerminal());
-    }
-
-    private static <T extends TapChanger<?, ?, ?, ?>> void setTapChangerRegulatedSide(ThreeWindingsTransformer transformer, ThreeSides side, String regulatedSide, Function<ThreeWindingsTransformer.Leg, T> tapChangerGetter) {
-        var rtc = tapChangerGetter.apply(transformer.getLeg(side));
+    // powsybl-core 7.5: the regulation terminal is no longer on the generic TapChanger, hence a setter per kind
+    private static void setTapChangerRegulatedSide(ThreeWindingsTransformer transformer, String regulatedSide, Consumer<Terminal> regulationTerminalSetter) {
         if (regulatedSide.isEmpty()) {
-            rtc.setRegulationTerminal(null);
+            regulationTerminalSetter.accept(null);
         }
-        rtc.setRegulationTerminal(transformer.getTerminal(ThreeSides.valueOf(regulatedSide)));
+        regulationTerminalSetter.accept(transformer.getTerminal(ThreeSides.valueOf(regulatedSide)));
     }
 
     private static double computeRho(TwoWindingsTransformer twt) {
