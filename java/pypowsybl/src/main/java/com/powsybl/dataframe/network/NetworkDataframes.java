@@ -1551,6 +1551,7 @@ public final class NetworkDataframes {
     private static void setTapChangerRegulatedSide(ThreeWindingsTransformer transformer, String regulatedSide, Consumer<Terminal> regulationTerminalSetter) {
         if (regulatedSide.isEmpty()) {
             regulationTerminalSetter.accept(null);
+            return;
         }
         regulationTerminalSetter.accept(transformer.getTerminal(ThreeSides.valueOf(regulatedSide)));
     }
