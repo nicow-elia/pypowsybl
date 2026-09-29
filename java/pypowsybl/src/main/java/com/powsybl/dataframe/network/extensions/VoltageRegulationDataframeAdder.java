@@ -10,18 +10,20 @@ package com.powsybl.dataframe.network.extensions;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.dataframe.SeriesMetadata;
 import com.powsybl.dataframe.network.adders.AbstractSimpleAdder;
-import com.powsybl.dataframe.network.adders.SeriesUtils;
 import com.powsybl.dataframe.update.DoubleSeries;
 import com.powsybl.dataframe.update.IntSeries;
 import com.powsybl.dataframe.update.StringSeries;
 import com.powsybl.dataframe.update.UpdatingDataframe;
 import com.powsybl.iidm.network.*;
-import com.powsybl.iidm.network.extensions.VoltageRegulationAdder;
+import com.powsybl.iidm.network.regulation.RegulationMode;
 
 import java.util.Collections;
 import java.util.List;
 
 /**
+ * Creates the former {@code voltageRegulation} extension of batteries as a {@link com.powsybl.iidm.network.regulation.VoltageRegulation}
+ * of the battery, see {@link VoltageRegulationDataframeProvider}.
+ *
  * @author Geoffroy Jamgotchian {@literal <geoffroy.jamgotchian at rte-france.com>}
  */
 public class VoltageRegulationDataframeAdder extends AbstractSimpleAdder {
@@ -58,12 +60,28 @@ public class VoltageRegulationDataframeAdder extends AbstractSimpleAdder {
             if (battery == null) {
                 throw new PowsyblException("Battery '" + batteryId + "' not found");
             }
-            VoltageRegulationAdder adder = battery.newExtension(VoltageRegulationAdder.class);
-            SeriesUtils.applyIfPresent(voltageRegulatorOn, row, value -> adder.withVoltageRegulatorOn(value != 0));
-            SeriesUtils.applyIfPresent(targetV, row, adder::withTargetV);
-            SeriesUtils.applyIfPresent(regulatedElement, row,
-                    value -> adder.withRegulatingTerminal(getTerminal(network, value, batteryId)));
-            adder.add();
+            if (voltageRegulatorOn == null) {
+                throw new PowsyblException("Voltage regulator status is not defined");
+            }
+            boolean on = voltageRegulatorOn.get(row) != 0;
+            Terminal terminal = regulatedElement != null ? getTerminal(network, regulatedElement.get(row), batteryId) : null;
+            double target = targetV != null ? targetV.get(row) : Double.NaN;
+            if (terminal != null && terminal != battery.getTerminal()) {
+                battery.newVoltageRegulation()
+                        .withMode(RegulationMode.VOLTAGE)
+                        .withRegulating(on)
+                        .withTerminal(terminal)
+                        .withTargetValue(target)
+                        .build();
+            } else {
+                if (!Double.isNaN(target)) {
+                    battery.setLocalTargetV(target);
+                }
+                battery.newVoltageRegulation()
+                        .withMode(RegulationMode.VOLTAGE)
+                        .withRegulating(on)
+                        .build();
+            }
         }
     }
 
