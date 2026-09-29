@@ -80,7 +80,19 @@
             7.5.0-SNAPSHOT (voltage regulation refactoring powsybl-core#3699 included).
         -->
         <powsybl-core.version>7.5.0-SNAPSHOT</powsybl-core.version>
-        <powsybl-open-reac.version>0.18.0</powsybl-open-reac.version>
+        <!--
+            diffstacking: TEMPORARY, like powsybl-core.version above. The released libraries of
+            powsybl-dependencies 2026.1.0 are compiled against core 7.3.0 and reference classes that core 7.5 removed
+            (voltage regulation refactoring, powsybl-core#3699: StaticVarCompensator.RegulationMode,
+            RatioTapChanger.RegulationMode, extensions RemoteReactivePowerControl, VoltagePerReactivePowerControl,
+            VoltageRegulation; security LimitReduction). No adapted release exists yet, so these three are locally
+            built SNAPSHOTs of their adapted upstream refs (OLF main fd435b3ca3, dynawo ci/core-7.4.0-SNAPSHOT
+            1b2980aadf, optimizer voltage_regulation_refacto_adaptations 2620ca3), installed into ~/.m2. Diagram,
+            entsoe and open-rao releases link against core 7.5 unchanged and stay on powsybl-dependencies.
+        -->
+        <powsybl-open-loadflow.version>2.4.0-SNAPSHOT</powsybl-open-loadflow.version>
+        <powsybl-dynawo.version>3.4.0-SNAPSHOT</powsybl-dynawo.version>
+        <powsybl-open-reac.version>0.19.0-SNAPSHOT</powsybl-open-reac.version>
     </properties>
 
     <dependencyManagement>
@@ -96,6 +108,19 @@
                 <groupId>com.powsybl</groupId>
                 <artifactId>powsybl-core</artifactId>
                 <version>${powsybl-core.version}</version>
+                <type>pom</type>
+                <scope>import</scope>
+            </dependency>
+            <!-- diffstacking: TEMPORARY, the library SNAPSHOTs of the properties above; first import wins. -->
+            <dependency>
+                <groupId>com.powsybl</groupId>
+                <artifactId>powsybl-open-loadflow</artifactId>
+                <version>${powsybl-open-loadflow.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.powsybl</groupId>
+                <artifactId>powsybl-dynawo</artifactId>
+                <version>${powsybl-dynawo.version}</version>
                 <type>pom</type>
                 <scope>import</scope>
             </dependency>
