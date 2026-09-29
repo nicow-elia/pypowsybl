@@ -1512,7 +1512,9 @@ public final class NetworkDataframes {
     }
 
     // The targets of a ratio tap changer are written only when they change: core 7.5 creates a regulation for any
-    // value written, even the unchanged NaN of a tap changer without regulation.
+    // value written, even the unchanged NaN of a tap changer without regulation. Phase tap changers are not
+    // VoltageRegulation holders (unchanged writes leave them unchanged) and the tap changers of three windings
+    // transformers are not updatable, hence the guards only here and in setRtcRegulatedSide.
     private static void setTransformerTargetDeadband(RatioTapChanger rtc, double targetDeadband) {
         if (Double.compare(rtc.getTargetDeadband(), targetDeadband) != 0) {
             rtc.setTargetDeadband(targetDeadband);

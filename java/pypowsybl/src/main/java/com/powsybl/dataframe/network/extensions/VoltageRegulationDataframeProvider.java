@@ -15,8 +15,6 @@ import com.powsybl.dataframe.network.NetworkDataframeMapperBuilder;
 import com.powsybl.dataframe.network.VoltageRegulationColumns;
 import com.powsybl.dataframe.network.adders.NetworkElementAdder;
 import com.powsybl.iidm.network.*;
-import com.powsybl.iidm.network.regulation.RegulationMode;
-import com.powsybl.iidm.network.regulation.VoltageRegulation;
 
 import java.util.List;
 import java.util.Objects;
@@ -28,12 +26,13 @@ import static com.powsybl.dataframe.network.extensions.VoltageRegulationDatafram
  * The former {@code voltageRegulation} extension of batteries.
  * <p>
  * Since powsybl-core 7.5 (voltage regulation refactoring, powsybl-core#3699) the extension no longer exists: a
- * battery holds a {@link VoltageRegulation} itself. This provider keeps the extension name and columns as a view on
- * it, with the rules of the IIDM reader and writer of the former extension: a battery "has the extension" when it has
- * a voltage regulation; {@code voltage_regulator_on} is "regulating in mode {@link RegulationMode#VOLTAGE}";
- * {@code target_v} is the regulating voltage target (the regulation's target value when it has a remote terminal,
- * the battery's local target otherwise); {@code regulated_element_id} is the regulating terminal (the battery's own
- * one when the regulation has none). Removing the extension removes the voltage regulation.
+ * battery holds a {@link com.powsybl.iidm.network.regulation.VoltageRegulation} itself. This provider keeps the
+ * extension name and columns as a view on it, with the rules of the IIDM reader and writer of the former extension:
+ * a battery "has the extension" when it has a voltage regulation; {@code voltage_regulator_on} is "regulating in mode
+ * {@link com.powsybl.iidm.network.regulation.RegulationMode#VOLTAGE}"; {@code target_v} is the regulating voltage
+ * target (the regulation's target value when it has a remote terminal, the battery's local target otherwise);
+ * {@code regulated_element_id} is the regulating terminal (the battery's own one when the regulation has none).
+ * Removing the extension removes the voltage regulation. The columns go through {@link VoltageRegulationColumns}.
  *
  * @author Geoffroy Jamgotchian {@literal <geoffroy.jamgotchian at rte-france.com>}
  */

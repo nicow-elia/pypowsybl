@@ -262,10 +262,15 @@ terminal and one target value — next to the element's local voltage and reacti
 
 * a value written back unchanged changes nothing, so a dataframe read, partly modified and written back only changes
   what was modified;
-* the columns of one update may come in any order: a regulated element keeps the target shown in ``target_v`` (in
-  ``target_q`` for a regulation in reactive power mode);
+* a target and a regulated element may come in either order in one update: a regulated element keeps the target
+  shown in ``target_v`` (in ``target_q`` for a regulation in reactive power mode);
 * switching ``voltage_regulator_on`` on, or changing the ``regulation_mode`` of a static var compensator, keeps the
-  ``target_v`` and ``target_q`` shown.
+  ``target_v`` and ``target_q`` shown. Such a switch needs the target of the new mode: the columns of one update are
+  applied in the order of the dataframe, so give the target before the switch, or in an earlier update;
+* an update that is refused leaves the element as it was;
+* switching ``voltage_regulator_on`` on for a generator that regulates reactive power at a remote terminal (the former
+  ``generatorRemoteReactivePowerControl``) replaces that regulation: its reactive power target is not kept, the
+  generator's own ``target_q`` is.
 
 Known limitations with powsybl-core 7.5:
 
