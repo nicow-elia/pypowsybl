@@ -1704,12 +1704,17 @@ void clearRdfDb(const JavaHandle& db, const std::string& scenario) {
 }
 
 std::vector<std::string> loadCgmesToRdfDb(const JavaHandle& db, const std::string& file, const std::string& scenario,
-                                          const std::string& version, const std::string& timestep,
+                                          int version, const std::string& timestamp,
+                                          const std::string& modellingAuthority,
+                                          const std::vector<std::string>& profiles,
                                           const std::map<std::string, std::string>& parameters, JavaHandle* reportNode) {
     StringMapArgs args(parameters);
+    ToCharPtrPtr profilesPtr(profiles);
     auto* graphsArrayPtr = PowsyblCaller::get()->callJava<array*>(::loadCgmesToRdfDb, db, (char*) file.data(),
-                                                                  (char*) scenario.data(), (char*) version.data(),
-                                                                  (char*) timestep.data(),
+                                                                  (char*) scenario.data(), version,
+                                                                  (char*) timestamp.data(),
+                                                                  (char*) modellingAuthority.data(),
+                                                                  profilesPtr.get(), profiles.size(),
                                                                   args.keys(), args.size(), args.values(), args.size(),
                                                                   (reportNode == nullptr) ? nullptr : *reportNode);
     ToStringVector graphs(graphsArrayPtr);
@@ -1717,28 +1722,36 @@ std::vector<std::string> loadCgmesToRdfDb(const JavaHandle& db, const std::strin
 }
 
 std::vector<std::string> loadCgmesBuffersToRdfDb(const JavaHandle& db, char** dataPtrs, int* dataSizes, int bufferCount,
-                                                 const std::string& scenario, const std::string& version,
-                                                 const std::string& timestep,
+                                                 const std::string& scenario, int version,
+                                                 const std::string& timestamp, const std::string& modellingAuthority,
+                                                 const std::vector<std::string>& profiles,
                                                  const std::map<std::string, std::string>& parameters,
                                                  JavaHandle* reportNode) {
     StringMapArgs args(parameters);
+    ToCharPtrPtr profilesPtr(profiles);
     auto* graphsArrayPtr = PowsyblCaller::get()->callJava<array*>(::loadCgmesBuffersToRdfDb, db, dataPtrs, dataSizes,
-                                                                  bufferCount, (char*) scenario.data(),
-                                                                  (char*) version.data(), (char*) timestep.data(),
+                                                                  bufferCount, (char*) scenario.data(), version,
+                                                                  (char*) timestamp.data(),
+                                                                  (char*) modellingAuthority.data(),
+                                                                  profilesPtr.get(), profiles.size(),
                                                                   args.keys(), args.size(), args.values(), args.size(),
                                                                   (reportNode == nullptr) ? nullptr : *reportNode);
     ToStringVector graphs(graphsArrayPtr);
     return graphs.get();
 }
 
-JavaHandle loadNetworkFromRdfDb(const JavaHandle& db, const std::string& scenario, const std::string& version,
-                                const std::string& timestep, const std::map<std::string, std::string>& parameters,
+JavaHandle loadNetworkFromRdfDb(const JavaHandle& db, const std::string& scenario, int version,
+                                const std::string& timestamp, const std::string& modellingAuthority,
+                                const std::vector<std::string>& profiles,
+                                const std::map<std::string, std::string>& parameters,
                                 const std::vector<std::string>& postProcessors, JavaHandle* reportNode,
                                 bool allowVariantMultiThreadAccess) {
     StringMapArgs args(parameters);
+    ToCharPtrPtr profilesPtr(profiles);
     ToCharPtrPtr postProcessorsPtr(postProcessors);
-    return PowsyblCaller::get()->callJava<JavaHandle>(::loadNetworkFromRdfDb, db, (char*) scenario.data(),
-                                                      (char*) version.data(), (char*) timestep.data(),
+    return PowsyblCaller::get()->callJava<JavaHandle>(::loadNetworkFromRdfDb, db, (char*) scenario.data(), version,
+                                                      (char*) timestamp.data(), (char*) modellingAuthority.data(),
+                                                      profilesPtr.get(), profiles.size(),
                                                       args.keys(), args.size(), args.values(), args.size(),
                                                       postProcessorsPtr.get(), postProcessors.size(),
                                                       (reportNode == nullptr) ? nullptr : *reportNode,
@@ -1746,17 +1759,17 @@ JavaHandle loadNetworkFromRdfDb(const JavaHandle& db, const std::string& scenari
 }
 
 JavaHandle updateNetworkFromRdfDb(const JavaHandle& network, const JavaHandle& db, const std::string& scenario,
-                                  const std::string& version, const std::string& timestep,
-                                  const std::vector<std::string>& subsets,
+                                  int version, const std::string& timestamp, const std::string& modellingAuthority,
+                                  const std::vector<std::string>& profiles,
                                   const std::map<std::string, std::string>& options,
                                   const std::map<std::string, std::string>& parameters, JavaHandle* reportNode) {
     StringMapArgs optionArgs(options);
     StringMapArgs args(parameters);
-    ToCharPtrPtr subsetsPtr(subsets);
+    ToCharPtrPtr profilesPtr(profiles);
     return PowsyblCaller::get()->callJava<JavaHandle>(::updateNetworkFromRdfDb, network, db,
-                                                      (char*) scenario.data(), (char*) version.data(),
-                                                      (char*) timestep.data(),
-                                                      subsetsPtr.get(), subsets.size(),
+                                                      (char*) scenario.data(), version,
+                                                      (char*) timestamp.data(), (char*) modellingAuthority.data(),
+                                                      profilesPtr.get(), profiles.size(),
                                                       optionArgs.keys(), optionArgs.size(),
                                                       optionArgs.values(), optionArgs.size(),
                                                       args.keys(), args.size(), args.values(), args.size(),
@@ -1780,13 +1793,30 @@ SeriesArray* getRdfDbSnapshots(const JavaHandle& db, const std::string& scenario
     return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbSnapshots, db, (char*) scenario.data()));
 }
 
-SeriesArray* getRdfDbVersions(const JavaHandle& db, const std::string& scenario, const std::string& timestep) {
+SeriesArray* getRdfDbVersions(const JavaHandle& db, const std::string& scenario, const std::string& timestamp,
+                              const std::string& modellingAuthority) {
     return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbVersions, db, (char*) scenario.data(),
-                                                                  (char*) timestep.data()));
+                                                                  (char*) timestamp.data(),
+                                                                  (char*) modellingAuthority.data()));
 }
 
-SeriesArray* getRdfDbTimesteps(const JavaHandle& db, const std::string& scenario) {
-    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbTimesteps, db, (char*) scenario.data()));
+SeriesArray* getRdfDbTimestamps(const JavaHandle& db, const std::string& scenario,
+                                const std::string& modellingAuthority) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbTimestamps, db, (char*) scenario.data(),
+                                                                  (char*) modellingAuthority.data()));
+}
+
+std::vector<std::string> getRdfDbModellingAuthorities(const JavaHandle& db, const std::string& scenario) {
+    auto* authoritiesArrayPtr = PowsyblCaller::get()->callJava<array*>(::getRdfDbModellingAuthorities, db,
+                                                                       (char*) scenario.data());
+    ToStringVector authorities(authoritiesArrayPtr);
+    return authorities.get();
+}
+
+SeriesArray* getRdfDbAssembly(const JavaHandle& db, const std::string& scenario, const std::string& timestamp,
+                              int version) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbAssembly, db, (char*) scenario.data(),
+                                                                  (char*) timestamp.data(), version));
 }
 
 SeriesArray* getRdfDbModels(const JavaHandle& db, const std::string& scenario) {
@@ -1797,20 +1827,26 @@ bool isRdfDbVersioned(const JavaHandle& db, const std::string& scenario) {
     return PowsyblCaller::get()->callJava<bool>(::isRdfDbVersioned, db, (char*) scenario.data());
 }
 
-std::string createRdfDbCheckpoint(const JavaHandle& db, const std::string& scenario, const std::string& version,
-                                  const std::string& timestep) {
+std::string createRdfDbCheckpoint(const JavaHandle& db, const std::string& scenario, int version,
+                                  const std::string& timestamp, const std::string& modellingAuthority) {
     return toString(PowsyblCaller::get()->callJava<char*>(::createRdfDbCheckpoint, db, (char*) scenario.data(),
-                                                          (char*) version.data(), (char*) timestep.data()));
+                                                          version, (char*) timestamp.data(),
+                                                          (char*) modellingAuthority.data()));
 }
 
 std::vector<std::string> exportNetworkEventsToRdfDb(const JavaHandle& recorder, const JavaHandle& db,
-                                                    const std::string& scenario, const std::string& version,
-                                                    const std::string& timestep,
+                                                    const std::string& scenario, int version,
+                                                    const std::string& timestamp,
+                                                    const std::string& modellingAuthority,
+                                                    const std::vector<std::string>& profiles,
                                                     const std::map<std::string, std::string>& options) {
     StringMapArgs args(options);
+    ToCharPtrPtr profilesPtr(profiles);
     auto* idsArrayPtr = PowsyblCaller::get()->callJava<array*>(::exportNetworkEventsToRdfDb, recorder, db,
-                                                               (char*) scenario.data(), (char*) version.data(),
-                                                               (char*) timestep.data(),
+                                                               (char*) scenario.data(), version,
+                                                               (char*) timestamp.data(),
+                                                               (char*) modellingAuthority.data(),
+                                                               profilesPtr.get(), profiles.size(),
                                                                args.keys(), args.size(), args.values(), args.size());
     ToStringVector ids(idsArrayPtr);
     return ids.get();
@@ -1827,18 +1863,24 @@ std::map<std::string, std::string> getNetworkRdfDbIdentity(const JavaHandle& net
 
 JavaHandle loadNetworkVariantsFromRdfDb(const JavaHandle& db, const std::string& scenario,
                                         const std::vector<std::string>& variantIds,
-                                        const std::vector<std::string>& versions,
-                                        const std::vector<std::string>& timesteps,
+                                        const std::vector<int>& versions,
+                                        const std::vector<std::string>& timestamps,
+                                        const std::vector<std::string>& modellingAuthorities,
+                                        const std::vector<std::string>& profiles,
                                         const std::map<std::string, std::string>& parameters,
                                         JavaHandle* reportNode, bool allowVariantMultiThreadAccess) {
     StringMapArgs args(parameters);
     ToCharPtrPtr variantIdsPtr(variantIds);
-    ToCharPtrPtr versionsPtr(versions);
-    ToCharPtrPtr timestepsPtr(timesteps);
+    ToIntPtr versionsPtr(versions);
+    ToCharPtrPtr timestampsPtr(timestamps);
+    ToCharPtrPtr modellingAuthoritiesPtr(modellingAuthorities);
+    ToCharPtrPtr profilesPtr(profiles);
     return PowsyblCaller::get()->callJava<JavaHandle>(::loadNetworkVariantsFromRdfDb, db, (char*) scenario.data(),
                                                       variantIdsPtr.get(), variantIds.size(),
                                                       versionsPtr.get(), versions.size(),
-                                                      timestepsPtr.get(), timesteps.size(),
+                                                      timestampsPtr.get(), timestamps.size(),
+                                                      modellingAuthoritiesPtr.get(), modellingAuthorities.size(),
+                                                      profilesPtr.get(), profiles.size(),
                                                       args.keys(), args.size(), args.values(), args.size(),
                                                       (reportNode == nullptr) ? nullptr : *reportNode,
                                                       allowVariantMultiThreadAccess);
@@ -1849,12 +1891,11 @@ SeriesArray* getNetworkRdfDbVariants(const JavaHandle& network) {
 }
 
 SeriesArray* exportNetworkEventsToRdfDbPerVariant(const JavaHandle& recorder, const JavaHandle& db,
-                                                  const std::string& scenario, const std::string& version,
+                                                  const std::string& scenario, int version,
                                                   const std::map<std::string, std::string>& options) {
     StringMapArgs args(options);
     return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::exportNetworkEventsToRdfDbPerVariant, recorder,
-                                                                  db, (char*) scenario.data(),
-                                                                  (char*) version.data(),
+                                                                  db, (char*) scenario.data(), version,
                                                                   args.keys(), args.size(), args.values(),
                                                                   args.size()));
 }

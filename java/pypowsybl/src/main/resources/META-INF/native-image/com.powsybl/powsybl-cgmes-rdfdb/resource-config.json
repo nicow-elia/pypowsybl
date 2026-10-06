@@ -1,0 +1,7 @@
+{
+  "resources":{
+    "includes":[
+      {"pattern":"\\Qcom/powsybl/cgmes/rdfdb/reports.properties\\E"},
+      {"pattern":"\\Qcom/powsybl/cgmes/rdfdb/reports_fr.properties\\E"}
+    ]}
+}

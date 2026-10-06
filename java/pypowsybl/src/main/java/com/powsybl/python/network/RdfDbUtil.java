@@ -18,6 +18,7 @@ import com.powsybl.cgmes.rdfdb.RdfDbConnection;
 import com.powsybl.cgmes.rdfdb.RdfDbException;
 import com.powsybl.cgmes.rdfdb.RdfDbExport;
 import com.powsybl.cgmes.rdfdb.RdfDbLoadOptions;
+import com.powsybl.cgmes.rdfdb.RdfDbNames;
 import com.powsybl.cgmes.rdfdb.RdfDbNetworkLoader;
 import com.powsybl.cgmes.rdfdb.RdfDbProvenance;
 import com.powsybl.cgmes.rdfdb.RdfDbUpdateOptions;
@@ -26,7 +27,6 @@ import com.powsybl.cgmes.rdfdb.SnapshotCatalog;
 import com.powsybl.cgmes.rdfdb.SnapshotInfo;
 import com.powsybl.cgmes.rdfdb.SnapshotRef;
 import com.powsybl.cgmes.rdfdb.StoredModel;
-import com.powsybl.cgmes.rdfdb.Timesteps;
 import com.powsybl.cgmes.rdfdb.UpdateResult;
 import com.powsybl.cgmes.rdfdb.UpdateStatistics;
 import com.powsybl.cgmes.rdfdb.VariantBinding;
@@ -43,6 +43,8 @@ import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkFactory;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.time.format.DateTimeParseException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -53,6 +55,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Properties;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Everything the RDF database bindings do, expressed in plain Java so that it can be unit tested on the JVM.
@@ -65,9 +69,13 @@ import java.util.Properties;
  * <p><b>Addressing.</b> Every call names a <em>scenario</em>: the free-form name of the base grid model (typically a
  * day, {@code "2021-02-09"}) whose instance files live together in the database. It is required and never defaulted -
  * a database is expected to hold many days side by side, and silently picking one of them would be a trap. Inside a
- * scenario a state is addressed by a <em>version</em> label and a <em>timestep</em>; both may be left open, which
- * means "the newest version" and "the base timestep of the scenario". A scenario that holds no snapshot at all is
- * <em>unversioned</em>, and then neither may be given.</p>
+ * scenario a snapshot is addressed by a <em>modelling authority</em> (the {@code md:Model.modelingAuthoritySet} of
+ * its files), a <em>timestamp</em> (an ISO-8601 instant on the C API) and an integer <em>version</em>; each may be
+ * left open, which means "the only modelling authority of the scenario", "the base timestamp of its tree" and "the
+ * newest version" respectively. Core requires the authority on every read; resolving an open one when the scenario
+ * holds exactly one is the convenience of these bindings ({@link #authority}). The <em>profiles</em> are not part of
+ * the address: they select which CGMES profiles a call reads or writes. A scenario that holds no snapshot at all is
+ * <em>unversioned</em>, and then nothing may be addressed in it.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
@@ -85,10 +93,14 @@ public final class RdfDbUtil {
     public static final String SNAPSHOT = "snapshot";
     /** Key of the scenario the network belongs to. */
     public static final String SCENARIO = "scenario";
-    /** Key of the version label the network is at. */
+    /** Key of the modelling authority of the snapshot the network is at. */
+    public static final String MODELLING_AUTHORITY = "modelling_authority";
+    /** Key of the timestamp (ISO-8601 instant) of the snapshot the network is at. */
+    public static final String TIMESTAMP = "timestamp";
+    /** Key of the version of the snapshot the network is at. */
     public static final String VERSION = "version";
-    /** Key of the timestep the network is at. */
-    public static final String TIMESTEP = "timestep";
+    /** The version a C caller passes for "not given": the head on a read, the head plus one on a write. */
+    public static final int NO_VERSION = -1;
     /** Key of the variant an update created or moved, empty when the update was not a variant operation. */
     public static final String VARIANT = "variant";
 
@@ -98,7 +110,6 @@ public final class RdfDbUtil {
     private static final String REFUSED = "refused";
     private static final String LEGACY_UPDATE = "update";
     private static final String MAX_DIFF_CHAIN = "max_diff_chain";
-    private static final String LABEL = "label";
 
     private static final DataframeMapper<List<GraphInfo>, Void> GRAPHS_MAPPER =
             new DataframeMapperBuilder<List<GraphInfo>, GraphInfo, Void>()
@@ -115,7 +126,7 @@ public final class RdfDbUtil {
             new DataframeMapperBuilder<List<ScenarioRow>, ScenarioRow, Void>()
                     .itemsProvider(rows -> rows)
                     .stringsIndex("scenario", ScenarioRow::scenario)
-                    .strings("base_timestep", ScenarioRow::baseTimestep)
+                    .strings("modelling_authorities", ScenarioRow::modellingAuthorities)
                     .booleans("versioned", ScenarioRow::versioned)
                     .ints("snapshot_count", ScenarioRow::snapshotCount)
                     .build();
@@ -125,9 +136,10 @@ public final class RdfDbUtil {
                     .itemsProvider(rows -> rows)
                     .stringsIndex("snapshot", SnapshotInfo::iri)
                     .strings("scenario", SnapshotInfo::scenario)
-                    .strings("version", SnapshotInfo::version)
-                    .strings("timestep", SnapshotInfo::timestep)
-                    .strings("timestep_label", i -> text(i.timestepLabel()))
+                    .strings(MODELLING_AUTHORITY, SnapshotInfo::modellingAuthority)
+                    .strings(TIMESTAMP, i -> i.timestamp().toString())
+                    .ints(VERSION, SnapshotInfo::version)
+                    .strings("profiles", i -> profileNames(i.profiles()))
                     .strings("kind", i -> i.kind().name().toLowerCase(Locale.ROOT))
                     .strings("parent", i -> text(i.parent()))
                     .strings("edge", RdfDbUtil::edgeName)
@@ -139,16 +151,31 @@ public final class RdfDbUtil {
                     .strings("description", i -> text(i.description()))
                     .build();
 
-    private static final DataframeMapper<List<SnapshotCatalog.TimestepInfo>, Void> TIMESTEPS_MAPPER =
-            new DataframeMapperBuilder<List<SnapshotCatalog.TimestepInfo>, SnapshotCatalog.TimestepInfo, Void>()
+    private static final DataframeMapper<List<SnapshotCatalog.TimestampInfo>, Void> TIMESTAMPS_MAPPER =
+            new DataframeMapperBuilder<List<SnapshotCatalog.TimestampInfo>, SnapshotCatalog.TimestampInfo, Void>()
                     .itemsProvider(rows -> rows)
-                    .stringsIndex("timestep", SnapshotCatalog.TimestepInfo::timestep)
-                    .strings("scenario", SnapshotCatalog.TimestepInfo::scenario)
-                    .strings("label", t -> text(t.label()))
+                    .stringsIndex(TIMESTAMP, t -> t.timestamp().toString())
+                    .strings(MODELLING_AUTHORITY, SnapshotCatalog.TimestampInfo::modellingAuthority)
                     .strings("root", t -> text(t.root()))
                     .strings("head", t -> text(t.head()))
-                    .ints("version_count", SnapshotCatalog.TimestepInfo::versionCount)
+                    .ints("version_count", SnapshotCatalog.TimestampInfo::versionCount)
                     .strings("pinned_base", t -> text(t.pinnedBase()))
+                    .build();
+
+    private static final DataframeMapper<List<AssemblyRow>, Void> ASSEMBLY_MAPPER =
+            new DataframeMapperBuilder<List<AssemblyRow>, AssemblyRow, Void>()
+                    .itemsProvider(rows -> rows)
+                    .stringsIndex(MODELLING_AUTHORITY, AssemblyRow::modellingAuthority)
+                    .strings("snapshot", r -> r.snapshot() == null ? "" : r.snapshot().iri())
+                    .strings(TIMESTAMP, r -> r.snapshot() == null ? "" : r.snapshot().timestamp().toString())
+                    .strings(VERSION, r -> r.snapshot() == null ? "" : Integer.toString(r.snapshot().version()))
+                    .strings("profiles", r -> r.snapshot() == null ? "" : profileNames(r.snapshot().profiles()))
+                    .strings("kind", r -> r.snapshot() == null ? ""
+                            : r.snapshot().kind().name().toLowerCase(Locale.ROOT))
+                    .ints("depth", r -> r.snapshot() == null ? -1 : r.snapshot().depth())
+                    .booleans("has_full", r -> r.snapshot() != null && r.snapshot().hasFull())
+                    .booleans("fast", r -> r.snapshot() != null && r.snapshot().fast())
+                    .strings("members", r -> r.snapshot() == null ? "" : String.join(";", r.snapshot().members()))
                     .build();
 
     private static final DataframeMapper<List<StoredModel>, Void> MODELS_MAPPER =
@@ -173,9 +200,9 @@ public final class RdfDbUtil {
                     .stringsIndex("variant", VariantRow::variant)
                     .strings("scenario", VariantRow::scenario)
                     .strings("snapshot", VariantRow::snapshot)
-                    .strings("version", VariantRow::version)
-                    .strings("timestep", VariantRow::timestep)
-                    .strings("label", VariantRow::label)
+                    .strings(MODELLING_AUTHORITY, VariantRow::modellingAuthority)
+                    .strings(TIMESTAMP, VariantRow::timestamp)
+                    .strings(VERSION, VariantRow::version)
                     .strings("cloned_from", VariantRow::clonedFrom)
                     .strings("eq", VariantRow::eq)
                     .strings("ssh", VariantRow::ssh)
@@ -189,8 +216,9 @@ public final class RdfDbUtil {
                     .itemsProvider(rows -> rows)
                     .stringsIndex("variant", VariantExportRow::variant)
                     .strings("snapshot", VariantExportRow::snapshot)
-                    .strings("version", VariantExportRow::version)
-                    .strings("timestep", VariantExportRow::timestep)
+                    .strings(MODELLING_AUTHORITY, VariantExportRow::modellingAuthority)
+                    .strings(TIMESTAMP, VariantExportRow::timestamp)
+                    .strings(VERSION, VariantExportRow::version)
                     .strings("models", VariantExportRow::models)
                     .ints("exported_events", VariantExportRow::exportedEvent)
                     .strings("rejected", VariantExportRow::rejected)
@@ -291,17 +319,19 @@ public final class RdfDbUtil {
      * @param network    the network to update in place
      * @param db         the open connection
      * @param scenario   the scenario holding the update data
-     * @param subsets    the CGMES subsets to read ({@code "SSH"}, {@code "SV"}, ...), empty for the steady-state pair
+     * @param profiles   the CGMES profiles to read ({@code "SSH"}, {@code "SV"}, ...), empty for the steady-state
+     *                   pair
      * @param parameters the CGMES import parameters
      * @param reportNode where the update reports, may be {@code null}
      * @return the route name of this legacy profile replacement, always {@code "update"}; the versioned routes are
      *         taken by the other overload
      */
-    public static String update(Network network, RdfDbConnection db, String scenario, List<String> subsets,
+    public static String update(Network network, RdfDbConnection db, String scenario, List<String> profiles,
                                 Map<String, String> parameters, ReportNode reportNode) {
         RdfDbLoadOptions options = RdfDbLoadOptions.forUpdate();
-        if (subsets != null && !subsets.isEmpty()) {
-            options.setSubsets(toSubsets(subsets));
+        EnumSet<CgmesSubset> projection = toProfiles(profiles);
+        if (projection != null) {
+            options.setProfiles(projection);
         }
         RdfDbNetworkLoader.update(network, db, requireScenario(scenario), options, toProperties(parameters),
                 orNoOp(reportNode));
@@ -316,26 +346,84 @@ public final class RdfDbUtil {
     }
 
     /**
-     * Translate the CGMES subset identifiers a caller writes into the enum.
+     * Translate the CGMES profile identifiers a caller writes into the enum.
      *
      * @param names the identifiers, for instance {@code SSH} or {@code EQ_BD}; case is ignored
-     * @return the subsets
+     * @return the profiles, or {@code null} when none was named (the default of the call)
      */
-    static EnumSet<CgmesSubset> toSubsets(List<String> names) {
-        EnumSet<CgmesSubset> subsets = EnumSet.noneOf(CgmesSubset.class);
+    static EnumSet<CgmesSubset> toProfiles(List<String> names) {
+        if (names == null || names.isEmpty()) {
+            return null;
+        }
+        EnumSet<CgmesSubset> profiles = EnumSet.noneOf(CgmesSubset.class);
         for (String name : names) {
             String identifier = name.trim().toUpperCase(Locale.ROOT);
-            CgmesSubset subset = Arrays.stream(CgmesSubset.values())
+            CgmesSubset profile = Arrays.stream(CgmesSubset.values())
                     .filter(s -> s != CgmesSubset.UNKNOWN && s.getIdentifier().equals(identifier))
                     .findFirst()
-                    .orElseThrow(() -> new RdfDbException("Unknown CGMES subset '" + name + "', expected one of "
+                    .orElseThrow(() -> new RdfDbException("Unknown CGMES profile '" + name + "', expected one of "
                             + Arrays.stream(CgmesSubset.values())
                                     .filter(s -> s != CgmesSubset.UNKNOWN)
                                     .map(CgmesSubset::getIdentifier)
                                     .toList()));
-            subsets.add(subset);
+            profiles.add(profile);
         }
-        return subsets;
+        return profiles;
+    }
+
+    /**
+     * Read the timestamp text of the C API.
+     *
+     * @param text an ISO-8601 date-time with an offset ({@code 2021-02-09T20:30:00Z}), or {@code null} or empty for
+     *             "not given"
+     * @return the instant, or {@code null}
+     */
+    static Instant toInstant(String text) {
+        String value = blankToNull(text);
+        if (value == null) {
+            return null;
+        }
+        try {
+            return Instant.parse(value.trim());
+        } catch (DateTimeParseException e) {
+            throw new PowsyblException("'" + text + "' is not a timestamp: expected an ISO-8601 date-time with an"
+                    + " offset, for instance 2021-02-09T20:30:00Z", e);
+        }
+    }
+
+    /**
+     * Read the version of the C API.
+     *
+     * @param version the version, {@link #NO_VERSION} for "not given"
+     * @return the version, or {@code null}
+     */
+    public static Integer toVersion(int version) {
+        return version == NO_VERSION ? null : version;
+    }
+
+    /**
+     * The modelling authority a read is addressed to.
+     *
+     * <p>Core requires one on every read. Most scenarios hold the tree of a single authority, so an open one is
+     * resolved here when there is exactly one to choose from - one request - and refused with the list otherwise.</p>
+     *
+     * @param catalog   the snapshots of the scenario
+     * @param authority the authority the caller named, {@code null} or blank for none
+     * @return the authority to address
+     * @throws PowsyblException if none was named and the scenario holds none or several
+     */
+    static String authority(SnapshotCatalog catalog, String authority) {
+        String named = blankToNull(authority);
+        if (named != null) {
+            return named;
+        }
+        List<String> all = catalog.modellingAuthorities();
+        if (all.size() == 1) {
+            return all.get(0);
+        }
+        throw new PowsyblException("scenario '" + catalog.scenario() + "' holds "
+                + (all.isEmpty() ? "no snapshot" : "the trees of the modelling authorities " + all)
+                + ", so the modelling authority cannot be left open: name one of them");
     }
 
     /**
@@ -377,18 +465,19 @@ public final class RdfDbUtil {
      * One row of {@code db.scenarios()} as Python sees it.
      *
      * @param scenario      the scenario name, as it was given at upload
-     * @param baseTimestep  the canonical timestep of the scenario's root, empty for an unversioned scenario
+     * @param modellingAuthorities the modelling authorities the scenario holds a tree of, {@code ;} joined, empty for
+     *                             an unversioned scenario
      * @param versioned     whether the scenario holds snapshots
      * @param snapshotCount how many snapshots it holds
      */
-    public record ScenarioRow(String scenario, String baseTimestep, boolean versioned, int snapshotCount) {
+    public record ScenarioRow(String scenario, String modellingAuthorities, boolean versioned, int snapshotCount) {
     }
 
     /**
      * What an update did, in a shape a C entry point can hand out as one handle.
      *
-     * <p>The versioned route answers with an {@link UpdateResult}; the legacy profile-replacement route
-     * ({@code subsets=[...]}) answers with nothing at all, and is represented by its route name. Exactly
+     * <p>The versioned route answers with an {@link UpdateResult}; the legacy profile-replacement route of an
+     * unversioned scenario answers with nothing at all, and is represented by its route name. Exactly
      * one of the two is set.</p>
      *
      * @param result      the result of the versioned route, {@code null} on the legacy route
@@ -398,7 +487,8 @@ public final class RdfDbUtil {
     }
 
     /**
-     * Whether a scenario holds snapshots, i.e. whether it can be addressed by version and timestep.
+     * Whether a scenario holds snapshots, i.e. whether it can be addressed by modelling authority, timestamp and
+     * version.
      *
      * @param db       the open connection
      * @param scenario the scenario
@@ -419,8 +509,8 @@ public final class RdfDbUtil {
         for (String scenario : db.scenarios()) {
             SnapshotCatalog catalog = db.snapshots(scenario);
             List<SnapshotInfo> snapshots = catalog.snapshots();
-            String base = snapshots.isEmpty() ? "" : catalog.baseTimestep();
-            rows.add(new ScenarioRow(scenario, base, !snapshots.isEmpty(), snapshots.size()));
+            String authorities = snapshots.isEmpty() ? "" : String.join(";", catalog.modellingAuthorities());
+            rows.add(new ScenarioRow(scenario, authorities, !snapshots.isEmpty(), snapshots.size()));
         }
         rows.sort(Comparator.comparing(ScenarioRow::scenario));
         return rows;
@@ -438,28 +528,80 @@ public final class RdfDbUtil {
     }
 
     /**
-     * The version chain of one timestep of a scenario.
+     * The version chain of one timestamp of a scenario.
      *
-     * @param db       the open connection
-     * @param scenario the scenario
-     * @param timestep the timestep text, {@code null} for the base timestep
-     * @return the snapshots of that timestep, oldest first; empty when the scenario holds none
+     * @param db                 the open connection
+     * @param scenario           the scenario
+     * @param timestamp          the timestamp, {@code null} or empty for the base timestamp
+     * @param modellingAuthority the modelling authority, {@code null} or empty for the only one
+     * @return the snapshots of that timestamp, oldest first; empty when the scenario holds none
      */
-    public static List<SnapshotInfo> versions(RdfDbConnection db, String scenario, String timestep) {
+    public static List<SnapshotInfo> versions(RdfDbConnection db, String scenario, String timestamp,
+                                              String modellingAuthority) {
         SnapshotCatalog catalog = db.snapshots(requireScenario(scenario));
-        // versions() resolves the timestep against the scenario's base day, which an empty scenario does not have
-        return catalog.isVersioned() ? catalog.versions(timestep) : List.of();
+        // an empty scenario has no tree, and so no base timestamp to default to
+        return catalog.isVersioned() ? catalog.versions(authority(catalog, modellingAuthority), toInstant(timestamp))
+                : List.of();
     }
 
     /**
-     * The timesteps of a scenario.
+     * The timestamps of one modelling authority's tree in a scenario.
+     *
+     * @param db                 the open connection
+     * @param scenario           the scenario
+     * @param modellingAuthority the modelling authority, {@code null} or empty for the only one
+     * @return one row per timestamp, oldest first; empty when the scenario holds no snapshot
+     */
+    public static List<SnapshotCatalog.TimestampInfo> timestamps(RdfDbConnection db, String scenario,
+                                                                  String modellingAuthority) {
+        SnapshotCatalog catalog = db.snapshots(requireScenario(scenario));
+        return catalog.isVersioned() ? catalog.timestamps(authority(catalog, modellingAuthority)) : List.of();
+    }
+
+    /**
+     * The modelling authorities a scenario holds a snapshot tree of.
      *
      * @param db       the open connection
      * @param scenario the scenario
-     * @return one row per timestep, oldest first
+     * @return the authorities, sorted; empty for an unversioned or unknown scenario
      */
-    public static List<SnapshotCatalog.TimestepInfo> timesteps(RdfDbConnection db, String scenario) {
-        return db.snapshots(requireScenario(scenario)).timesteps();
+    public static List<String> modellingAuthorities(RdfDbConnection db, String scenario) {
+        return db.snapshots(requireScenario(scenario)).modellingAuthorities();
+    }
+
+    /**
+     * One row of {@code db.assembly(...)}: a modelling authority of the scenario and its snapshot at the moment.
+     *
+     * @param modellingAuthority the authority
+     * @param snapshot           its snapshot at that moment, {@code null} when it has none there
+     */
+    public record AssemblyRow(String modellingAuthority, SnapshotInfo snapshot) {
+    }
+
+    /**
+     * Every modelling authority of a scenario at one moment: what a CGM is assembled from.
+     *
+     * <p>Core answers only the authorities that have a snapshot at that moment; the table answers every authority
+     * of the scenario, so that a missing one is a visible row with no snapshot rather than an absent one.</p>
+     *
+     * @param db        the open connection
+     * @param scenario  the scenario
+     * @param timestamp the moment, required
+     * @param version   the version every authority is taken at, {@code null} for the head of each
+     * @return one row per authority of the scenario, sorted by authority
+     */
+    public static List<AssemblyRow> assembly(RdfDbConnection db, String scenario, String timestamp,
+                                             Integer version) {
+        Instant moment = toInstant(timestamp);
+        if (moment == null) {
+            throw new PowsyblException("an assembly is the state of every modelling authority at one moment, so it"
+                    + " needs a timestamp");
+        }
+        SnapshotCatalog catalog = db.snapshots(requireScenario(scenario));
+        Map<String, SnapshotInfo> present = catalog.assembly(moment, version);
+        return catalog.modellingAuthorities().stream()
+                .map(authority -> new AssemblyRow(authority, present.get(authority)))
+                .toList();
     }
 
     /**
@@ -476,77 +618,83 @@ public final class RdfDbUtil {
     /**
      * Build a network from a scenario, at a snapshot when one is addressed.
      *
-     * @param db             the open connection
-     * @param scenario       the scenario to read
-     * @param version        the version label, {@code null} for the newest one
-     * @param timestep       the timestep text, {@code null} for the base timestep
-     * @param parameters     the CGMES import parameters
-     * @param postProcessors the import post processors, only supported on the unversioned route
-     * @param reportNode     where the load reports, may be {@code null}
+     * @param db                 the open connection
+     * @param scenario           the scenario to read
+     * @param version            the version, {@code null} for the newest one
+     * @param timestamp          the timestamp, {@code null} or empty for the base timestamp
+     * @param modellingAuthority the modelling authority, {@code null} or empty for the only one of the scenario
+     * @param profiles           the profiles to load, empty for every profile of the snapshot
+     * @param parameters         the CGMES import parameters
+     * @param postProcessors     the import post processors, only supported when nothing is addressed
+     * @param reportNode         where the load reports, may be {@code null}
      * @return the network
      */
-    public static Network load(RdfDbConnection db, String scenario, String version, String timestep,
-                               Map<String, String> parameters, List<String> postProcessors, ReportNode reportNode) {
+    public static Network load(RdfDbConnection db, String scenario, Integer version, String timestamp,
+                               String modellingAuthority, List<String> profiles, Map<String, String> parameters,
+                               List<String> postProcessors, ReportNode reportNode) {
         requireScenario(scenario);
-        String step = blankToNull(timestep);
-        String label = blankToNull(version);
-        if (label == null && step == null) {
+        Instant moment = toInstant(timestamp);
+        EnumSet<CgmesSubset> projection = toProfiles(profiles);
+        if (version == null && moment == null && blankToNull(modellingAuthority) == null && projection == null) {
             // "The scenario" without an address: the unversioned graphs, or the newest snapshot of a versioned
-            // scenario. The loader decides which, and it is the only form that takes load options - so it is also
-            // the only form that can honour post processors
+            // scenario of one modelling authority. The loader decides which, and it is the only form that takes
+            // load options - so it is also the only form that can honour post processors
             return load(db, scenario, parameters, postProcessors, reportNode);
         }
         if (postProcessors != null && !postProcessors.isEmpty()) {
             throw new PowsyblException("post_processors are not supported when loading one addressed snapshot;"
-                    + " the snapshot entry points of cgmes-rdfdb take no load options. Load the scenario without a"
-                    + " version and a timestep, or run the post processors yourself");
+                    + " the snapshot entry points of cgmes-rdfdb take no load options. Load the scenario without an"
+                    + " address and without profiles, or run the post processors yourself");
         }
-        return RdfDbNetworkLoader.load(db, scenario, label, step, NetworkFactory.findDefault(),
-                toProperties(parameters), orNoOp(reportNode));
+        SnapshotRef ref = SnapshotRef.of(scenario, authority(db.snapshots(scenario), modellingAuthority), moment,
+                version);
+        return RdfDbNetworkLoader.load(db, ref, projection, NetworkFactory.findDefault(), toProperties(parameters),
+                orNoOp(reportNode));
     }
 
     /**
      * Bring a network to a snapshot, or replace its profiles from the unversioned graphs of a scenario.
      *
-     * @param network    the network to bring up to date
-     * @param db         the open connection
-     * @param scenario   the scenario holding the target
-     * @param version    the version label, {@code null} for the newest one
-     * @param timestep   the timestep text, {@code null} for the base timestep
-     * @param subsets    the CGMES subsets of the legacy profile-replacement route, empty for the versioned route
-     * @param options    the update options: {@code max_diff_chain}, and {@code variant} to create or update one
-     *                   variant of the network instead of its working state
-     * @param parameters the CGMES import parameters
-     * @param reportNode where the update reports, may be {@code null}
+     * <p>On a versioned scenario the network is brought to the addressed snapshot; the profiles are then the
+     * projection the update looks at ({@link RdfDbUpdateOptions#setProfiles}). On an unversioned scenario, with
+     * nothing addressed, the profiles are replaced from the scenario's graphs instead (the legacy route).</p>
+     *
+     * @param network            the network to bring up to date
+     * @param db                 the open connection
+     * @param scenario           the scenario holding the target
+     * @param version            the version, {@code null} for the newest one
+     * @param timestamp          the timestamp, {@code null} or empty for the base timestamp
+     * @param modellingAuthority the modelling authority, {@code null} or empty for the only one of the scenario
+     * @param profiles           the profiles the update looks at, empty for the default (equipment and steady state
+     *                           hypothesis)
+     * @param options            the update options: {@code max_diff_chain}, and {@code variant} to create or update
+     *                           one variant of the network instead of its working state
+     * @param parameters         the CGMES import parameters
+     * @param reportNode         where the update reports, may be {@code null}
      * @return what was done
      */
-    public static UpdateOutcome update(Network network, RdfDbConnection db, String scenario, String version,
-                                       String timestep, List<String> subsets, Map<String, String> options,
-                                       Map<String, String> parameters, ReportNode reportNode) {
+    public static UpdateOutcome update(Network network, RdfDbConnection db, String scenario, Integer version,
+                                       String timestamp, String modellingAuthority, List<String> profiles,
+                                       Map<String, String> options, Map<String, String> parameters,
+                                       ReportNode reportNode) {
         requireScenario(scenario);
         String targetVariant = options == null ? null : blankToNull(options.get(VARIANT));
-        if (subsets != null && !subsets.isEmpty()) {
-            if (targetVariant != null) {
-                throw new PowsyblException("'" + VARIANT + "' addresses a snapshot as one variant of the network,"
-                        + " and the profile replacement of an un-versioned scenario addresses no snapshot;"
-                        + " the two cannot be combined");
-            }
-            update(network, db, scenario, subsets, parameters, reportNode);
-            return new UpdateOutcome(null, LEGACY_UPDATE);
-        }
-        String step = blankToNull(timestep);
-        String label = blankToNull(version);
+        Instant moment = toInstant(timestamp);
+        EnumSet<CgmesSubset> projection = toProfiles(profiles);
         SnapshotCatalog catalog = db.snapshots(scenario);
-        if (!catalog.isVersioned() && label == null && step == null) {
+        if (!catalog.isVersioned() && version == null && moment == null && blankToNull(modellingAuthority) == null) {
             if (targetVariant != null) {
                 throw new PowsyblException("scenario '" + scenario + "' holds no snapshot, so there is nothing for"
                         + " variant '" + targetVariant + "' to stand for; store a root snapshot first");
             }
             // An unversioned scenario has no snapshot to address; the profile replacement is what "update" means there
-            update(network, db, scenario, List.of(), parameters, reportNode);
+            update(network, db, scenario, profiles, parameters, reportNode);
             return new UpdateOutcome(null, LEGACY_UPDATE);
         }
         RdfDbUpdateOptions updateOptions = new RdfDbUpdateOptions();
+        if (projection != null) {
+            updateOptions.setProfiles(projection);
+        }
         updateOptions.setAllowFullReload(true);
         updateOptions.setTargetVariant(targetVariant);
         String chain = options == null ? null : options.get(MAX_DIFF_CHAIN);
@@ -559,8 +707,9 @@ public final class RdfDbUtil {
                 throw new PowsyblException("'" + MAX_DIFF_CHAIN + "' must be a whole number, got '" + chain + "'", e);
             }
         }
-        UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(label, step, catalog),
-                updateOptions, toProperties(parameters), orNoOp(reportNode));
+        SnapshotRef target = SnapshotRef.of(scenario, authority(catalog, modellingAuthority), moment, version);
+        UpdateResult result = RdfDbNetworkLoader.update(network, db, target, updateOptions, toProperties(parameters),
+                orNoOp(reportNode));
         if (result.isReplacement()) {
             // The replacement network is a fresh object built by the materialiser; the threading mode is a property
             // of the handle its owner asked for, so it is carried over rather than silently reset
@@ -612,69 +761,92 @@ public final class RdfDbUtil {
     }
 
     /**
-     * Read CGMES instance files into a scenario, unversioned or as its root snapshot.
+     * Read CGMES instance files into a scenario, unversioned or as a snapshot.
      *
-     * <p>Without a version this is the unversioned upload, which core refuses on a scenario that
-     * already holds snapshots. With one, the files become the <em>root</em> snapshot of an empty scenario, or -
-     * when the scenario already has a root - one further snapshot: the parent state is materialised, the new files
-     * are compared against it and the difference is written ({@code SnapshotCatalog.putAsDiff}). That is how a day
-     * of timesteps exported by a TSO reaches the database without anyone recording anything.</p>
+     * <p>With nothing addressed this is the unversioned upload, which core refuses on a scenario that already holds
+     * snapshots. With a version, a timestamp or a modelling authority, the files become the <em>root</em> snapshot of
+     * their modelling authority's tree when it has none yet, or - when it has one - one further snapshot: the parent
+     * state is materialised, the new files are compared against it and the difference is written
+     * ({@code SnapshotCatalog.putAsDiff}). That is how a day of timestamps exported by a TSO reaches the database
+     * without anyone recording anything.</p>
      *
-     * @param db         the open connection
-     * @param ds         the data source holding the instance files
-     * @param scenario   the scenario to write into
-     * @param version    the version label of the snapshot, {@code null} for an unversioned upload
-     * @param timestep   the timestep the files describe as an instant or an {@code "8:30"} label of the scenario's
-     *                   base day; {@code null} for the base timestep, which for a root is taken from the steady
-     *                   state file
-     * @param parameters the CGMES import parameters
-     * @param reportNode where the reader reports, may be {@code null}
+     * <p>Which of the two a write is decides the tree of the authority: the named one, or - when none is named - the
+     * only one of a versioned scenario. Adding the tree of a second authority to a scenario therefore names it.</p>
+     *
+     * @param db                 the open connection
+     * @param ds                 the data source holding the instance files
+     * @param scenario           the scenario to write into
+     * @param version            the version of the snapshot, {@code null} for the head's plus one (1 for a root)
+     * @param timestamp          the moment the files describe; {@code null} or empty for the base timestamp, which
+     *                           for a root is taken from the steady state file
+     * @param modellingAuthority the modelling authority, {@code null} or empty to take it from the files
+     * @param profiles           the profiles to store (a root) or to compare (a further snapshot), empty for the
+     *                           default of each
+     * @param parameters         the CGMES import parameters
+     * @param reportNode         where the reader reports, may be {@code null}
      * @return the graph names of an unversioned upload, the stored model ids of a snapshot
      */
-    public static List<String> loadCgmes(RdfDbConnection db, ReadOnlyDataSource ds, String scenario, String version,
-                                         String timestep, Map<String, String> parameters, ReportNode reportNode) {
+    public static List<String> loadCgmes(RdfDbConnection db, ReadOnlyDataSource ds, String scenario, Integer version,
+                                         String timestamp, String modellingAuthority, List<String> profiles,
+                                         Map<String, String> parameters, ReportNode reportNode) {
         requireScenario(scenario);
-        String label = blankToNull(version);
-        String step = blankToNull(timestep);
-        if (label == null) {
-            if (step != null) {
-                throw new PowsyblException("a timestep addresses a snapshot, so it needs a version: pass"
-                        + " version='1.0' to store the root of scenario '" + scenario + "'");
+        Instant moment = toInstant(timestamp);
+        String authority = blankToNull(modellingAuthority);
+        EnumSet<CgmesSubset> projection = toProfiles(profiles);
+        if (version == null && moment == null && authority == null) {
+            if (projection != null) {
+                throw new PowsyblException("profiles select what a snapshot stores, and an upload with neither a"
+                        + " version, a timestamp nor a modelling authority stores no snapshot: pass version=1 to"
+                        + " store the root of scenario '" + scenario + "'");
             }
             return loadCgmes(db, scenario, ds, parameters, reportNode);
         }
         SnapshotCatalog catalog = db.snapshots(scenario);
         Properties props = toProperties(parameters);
         ReportNode rn = orNoOp(reportNode);
-        SnapshotInfo written = catalog.isVersioned()
-                // A label is a wall time of this scenario's own base day, so only the catalogue can resolve it
-                ? catalog.putAsDiff(ds, null, SnapshotRef.of(label, step, catalog), props, rn)
-                : catalog.putFull(ds, null, SnapshotRef.of(scenario, label, step), props, rn);
+        SnapshotRef ref = SnapshotRef.of(scenario, authority, moment, version);
+        boolean hasRoot = authority == null ? catalog.isVersioned() : catalog.root(authority).isPresent();
+        SnapshotInfo written = hasRoot
+                ? catalog.putAsDiff(ds, null, ref, projection, props, rn)
+                : catalog.putFull(ds, null, ref, projection, props, rn);
         return List.copyOf(written.members());
     }
 
     /**
      * Store the changes a recorder holds as a new snapshot of a scenario.
      *
-     * @param recording the recorder holding the changes
-     * @param db        the open connection
-     * @param scenario  the base scenario the difference is made against
-     * @param version   the version label of the new snapshot, {@code null} for the next label of the timestep
-     * @param timestep  the timestep of the new snapshot, {@code null} for the base timestep
-     * @param options   the export options, see {@link NetworkEventRecording#diffOptions}, plus {@code variant} to
-     *                  write the changes of one variant as the successor of <em>that variant's</em> snapshot
+     * @param recording          the recorder holding the changes
+     * @param db                 the open connection
+     * @param scenario           the base scenario the difference is made against
+     * @param version            the version of the new snapshot, {@code null} for the head's plus one
+     * @param timestamp          the timestamp of the new snapshot, {@code null} or empty for the base timestamp
+     * @param modellingAuthority the modelling authority, {@code null} or empty for the one of the snapshot the
+     *                           network is at
+     * @param profiles           the profiles the difference may write, empty for every profile a change touches; a
+     *                           change of another profile is an unsupported change
+     * @param options            the export options, see {@link NetworkEventRecording#diffOptions}, plus
+     *                           {@code variant} to write the changes of one variant as the successor of <em>that
+     *                           variant's</em> snapshot
      * @return the stored model ids
      */
     public static List<String> exportRecording(NetworkEventRecording recording, RdfDbConnection db, String scenario,
-                                               String version, String timestep, Map<String, String> options) {
+                                               Integer version, String timestamp, String modellingAuthority,
+                                               List<String> profiles, Map<String, String> options) {
         requireScenario(scenario);
+        Instant moment = toInstant(timestamp);
+        String authority = blankToNull(modellingAuthority);
         Map<String, String> rest = databaseDecidedFree(options);
         String variant = blankToNull(rest.remove(VARIANT));
         CgmesDiffExport.ExportOptions exportOptions = NetworkEventRecording.diffOptions(rest);
+        EnumSet<CgmesSubset> projection = toProfiles(profiles);
+        if (projection != null) {
+            exportOptions.setSubsets(projection);
+        }
         if (variant != null) {
-            if (blankToNull(timestep) != null) {
+            if (moment != null || authority != null) {
                 throw new PowsyblException("a variant export writes the successor of the snapshot variant '"
-                        + variant + "' stands for, so its timestep is that variant's own; drop the timestep");
+                        + variant + "' stands for, so its timestamp and modelling authority are that variant's own;"
+                        + " drop them");
             }
             Network network = recording.getNetwork();
             if (!network.getVariantManager().getVariantIds().contains(variant)) {
@@ -683,28 +855,28 @@ public final class RdfDbUtil {
             }
             checkSameScenario(network, scenario);
             return recording.exportWithSnapshot(events -> storedIds(
-                    RdfDbExport.exportVariant(recording.getNetwork(), events, db, variant, blankToNull(version),
+                    RdfDbExport.exportVariant(recording.getNetwork(), events, db, variant, version,
                             exportOptions, ReportNode.NO_OP)));
         }
-        // The label-taking form: the timestep is resolved against the base day of this very scenario
+        SnapshotRef target = SnapshotRef.of(scenario, authority, moment, version);
         return recording.exportWithSnapshot(events -> storedIds(
-                RdfDbExport.export(recording.getNetwork(), events, db, scenario, blankToNull(version),
-                        blankToNull(timestep), exportOptions, ReportNode.NO_OP)));
+                RdfDbExport.export(recording.getNetwork(), events, db, target, exportOptions, ReportNode.NO_OP)));
     }
 
     /**
      * One row of the table {@code to_rdf_updates(..., per_variant=True)} answers with.
      *
      * @param variant       the variant the changes were recorded on
-     * @param snapshot      the IRI of the snapshot they became, empty when nothing was written
-     * @param version       the version label of that snapshot
-     * @param timestep      the timestep of that snapshot
-     * @param models        the stored model ids, {@code ;} joined
-     * @param exportedEvent how many recorded changes reached the database
-     * @param rejected      the changes that did not, {@code ; } joined
+     * @param snapshot           the IRI of the snapshot they became, empty when nothing was written
+     * @param modellingAuthority the modelling authority of that snapshot
+     * @param timestamp          the timestamp of that snapshot, an ISO-8601 instant
+     * @param version            the version of that snapshot, empty when nothing was written
+     * @param models             the stored model ids, {@code ;} joined
+     * @param exportedEvent      how many recorded changes reached the database
+     * @param rejected           the changes that did not, {@code ; } joined
      */
-    public record VariantExportRow(String variant, String snapshot, String version, String timestep, String models,
-                                   int exportedEvent, String rejected) {
+    public record VariantExportRow(String variant, String snapshot, String modellingAuthority, String timestamp,
+                                   String version, String models, int exportedEvent, String rejected) {
     }
 
     /**
@@ -716,14 +888,14 @@ public final class RdfDbUtil {
      * @param recording the recorder holding the changes
      * @param db        the open connection
      * @param scenario  the scenario the variants belong to
-     * @param version   the version label every new snapshot gets, {@code null} for the next label of each
-     *                  timestep's chain
+     * @param version   the version every new snapshot gets, {@code null} for the head's plus one of each
+     *                  timestamp's chain
      * @param options   the export options, see {@link NetworkEventRecording#diffOptions}
      * @return one row per variant the changes were recorded on, in first-occurrence order
      */
     public static List<VariantExportRow> exportRecordingPerVariant(NetworkEventRecording recording,
                                                                    RdfDbConnection db, String scenario,
-                                                                   String version, Map<String, String> options) {
+                                                                   Integer version, Map<String, String> options) {
         requireScenario(scenario);
         Map<String, String> rest = databaseDecidedFree(options);
         if (rest.containsKey(VARIANT)) {
@@ -733,16 +905,17 @@ public final class RdfDbUtil {
         CgmesDiffExport.ExportOptions exportOptions = NetworkEventRecording.diffOptions(rest);
         checkSameScenario(recording.getNetwork(), scenario);
         Map<String, RdfDbExport.VariantExport> exports = recording.exportWithSnapshot(events ->
-                RdfDbExport.exportPerVariant(recording.getNetwork(), events, db, blankToNull(version),
-                        exportOptions, ReportNode.NO_OP));
+                RdfDbExport.exportPerVariant(recording.getNetwork(), events, db, version, exportOptions,
+                        ReportNode.NO_OP));
         List<VariantExportRow> rows = new ArrayList<>();
         exports.forEach((variantId, export) -> {
             RdfDbExport.SnapshotResult result = export.result();
             SnapshotInfo snapshot = result == null ? null : result.snapshot();
             rows.add(new VariantExportRow(variantId,
                     snapshot == null ? "" : snapshot.iri(),
-                    snapshot == null ? "" : snapshot.version(),
-                    snapshot == null ? "" : snapshot.timestep(),
+                    snapshot == null ? "" : snapshot.modellingAuthority(),
+                    snapshot == null ? "" : snapshot.timestamp().toString(),
+                    snapshot == null ? "" : Integer.toString(snapshot.version()),
                     result == null ? "" : String.join(";", storedIds(result)),
                     result == null ? 0 : result.exportedEvents().size(),
                     String.join("; ", export.rejected())));
@@ -753,10 +926,10 @@ public final class RdfDbUtil {
     /**
      * Load many snapshots of one scenario as the variants of a single network.
      *
-     * <p>Three parallel arrays, because that is what crosses the native boundary cheaply. An empty variant
-     * identifier lets the naming rule of core decide (the timestep label, or {@code version@label} when two
-     * requests share a label); an empty version is the newest one of that timestep; an empty timestep is the base
-     * timestep of the scenario.</p>
+     * <p>Four parallel arrays, because that is what crosses the native boundary cheaply. An empty variant
+     * identifier lets the naming rule of core decide (the ISO instant of the snapshot, or {@code version@instant}
+     * when two requests share an instant); a {@code null} version is the newest one of that timestamp; an empty
+     * timestamp is the base timestamp; an empty modelling authority is the only one of the scenario.</p>
      *
      * <p>A snapshot that cannot be reached inside a variant does not fail the load: its variant is not created and
      * the refusal is left on the network, where {@link #variantRows} shows it as a {@code refused} row.</p>
@@ -764,35 +937,50 @@ public final class RdfDbUtil {
      * @param db                            the open connection
      * @param scenario                      the scenario, required
      * @param variantIds                    the variant identifiers, {@code ""} for the naming rule
-     * @param versions                      the version labels, {@code ""} for the newest one
-     * @param timesteps                     the timesteps, {@code ""} for the base timestep
+     * @param versions                      the versions, {@code null} for the newest one
+     * @param timestamps                    the timestamps, {@code ""} for the base timestamp
+     * @param modellingAuthorities          the modelling authorities, {@code ""} for the only one
+     * @param profiles                      the profiles every variant is updated by, empty for the default
      * @param parameters                    the CGMES import parameters
      * @param reportNode                    where the load reports, may be {@code null}
      * @param allowVariantMultiThreadAccess whether the network may be read from several threads afterwards
      * @return the network, with one variant per request that was not refused
      */
     public static Network loadVariants(RdfDbConnection db, String scenario, List<String> variantIds,
-                                       List<String> versions, List<String> timesteps,
+                                       List<Integer> versions, List<String> timestamps,
+                                       List<String> modellingAuthorities, List<String> profiles,
                                        Map<String, String> parameters, ReportNode reportNode,
                                        boolean allowVariantMultiThreadAccess) {
         requireScenario(scenario);
-        Objects.requireNonNull(timesteps);
-        if (timesteps.isEmpty()) {
+        Objects.requireNonNull(timestamps);
+        if (timestamps.isEmpty()) {
             throw new PowsyblException("at least one snapshot is needed to load a network as variants");
         }
-        if (variantIds.size() != timesteps.size() || versions.size() != timesteps.size()) {
-            throw new PowsyblException("the variant identifiers, the versions and the timesteps must be as many:"
-                    + " got " + variantIds.size() + ", " + versions.size() + " and " + timesteps.size());
+        int count = timestamps.size();
+        if (variantIds.size() != count || versions.size() != count || modellingAuthorities.size() != count) {
+            throw new PowsyblException("the variant identifiers, the versions, the timestamps and the modelling"
+                    + " authorities must be as many: got " + variantIds.size() + ", " + versions.size() + ", "
+                    + count + " and " + modellingAuthorities.size());
         }
         SnapshotCatalog catalog = db.snapshots(scenario);
         List<VariantRequest> requests = new ArrayList<>();
-        for (int i = 0; i < timesteps.size(); i++) {
-            SnapshotRef ref = SnapshotRef.of(blankToNull(versions.get(i)), blankToNull(timesteps.get(i)),
-                    catalog);
+        String onlyAuthority = null;
+        for (int i = 0; i < count; i++) {
+            String authority = blankToNull(modellingAuthorities.get(i));
+            if (authority == null) {
+                // one listing for every open request
+                onlyAuthority = onlyAuthority == null ? authority(catalog, null) : onlyAuthority;
+                authority = onlyAuthority;
+            }
+            SnapshotRef ref = SnapshotRef.of(scenario, authority, toInstant(timestamps.get(i)), versions.get(i));
             requests.add(new VariantRequest(blankToNull(variantIds.get(i)), ref));
         }
         RdfDbVariantLoadOptions options = new RdfDbVariantLoadOptions()
                 .setAllowVariantMultiThreadAccess(allowVariantMultiThreadAccess);
+        EnumSet<CgmesSubset> projection = toProfiles(profiles);
+        if (projection != null) {
+            options.setUpdateOptions(options.getUpdateOptions().setProfiles(projection));
+        }
         VariantLoadResult result = RdfDbNetworkLoader.loadVariants(db, scenario, requests, options,
                 NetworkFactory.findDefault(), toProperties(parameters),
                 orNoOp(reportNode));
@@ -805,9 +993,9 @@ public final class RdfDbUtil {
      * @param variant    the identifier of the IIDM variant
      * @param scenario   the scenario the snapshot belongs to
      * @param snapshot   the IRI of the snapshot the variant stands for
-     * @param version    the version label of that snapshot
-     * @param timestep   the timestep of that snapshot
-     * @param label      the {@code HH:MM} label of the timestep
+     * @param modellingAuthority the modelling authority of that snapshot
+     * @param timestamp  the timestamp of that snapshot, an ISO-8601 instant
+     * @param version    the version of that snapshot, empty when the variant stands for none
      * @param clonedFrom the variant this one was cloned from
      * @param eq         the stored equipment model the variant is at
      * @param ssh        the stored steady state hypothesis model the variant is at
@@ -815,9 +1003,9 @@ public final class RdfDbUtil {
      * @param status     {@code primary}, {@code bound}, {@code unbound} or {@code refused}
      * @param reasons    why a refused snapshot could not be reached
      */
-    public record VariantRow(String variant, String scenario, String snapshot, String version, String timestep,
-                             String label, String clonedFrom, String eq, String ssh, String caseDate, String status,
-                             String reasons) {
+    public record VariantRow(String variant, String scenario, String snapshot, String modellingAuthority,
+                             String timestamp, String version, String clonedFrom, String eq, String ssh,
+                             String caseDate, String status, String reasons) {
     }
 
     /**
@@ -863,9 +1051,9 @@ public final class RdfDbUtil {
                 rows.set(existing, withReasons(rows.get(existing), reasons));
             } else {
                 rows.add(new VariantRow(outcome.variantId(), ref == null ? "" : ref.scenario(),
-                        text(outcome.snapshotIri()), ref == null ? "" : text(ref.version()),
-                        ref == null ? "" : text(ref.timestep()), "", text(outcome.clonedFrom()), "", "", "",
-                        "refused", reasons));
+                        text(outcome.snapshotIri()), ref == null ? "" : text(ref.modellingAuthority()),
+                        ref == null ? "" : text(ref.timestamp()), ref == null ? "" : text(ref.version()),
+                        text(outcome.clonedFrom()), "", "", "", "refused", reasons));
             }
         }
         return rows;
@@ -895,8 +1083,9 @@ public final class RdfDbUtil {
     }
 
     private static VariantRow withReasons(VariantRow row, String reasons) {
-        return new VariantRow(row.variant(), row.scenario(), row.snapshot(), row.version(), row.timestep(),
-                row.label(), row.clonedFrom(), row.eq(), row.ssh(), row.caseDate(), row.status(), reasons);
+        return new VariantRow(row.variant(), row.scenario(), row.snapshot(), row.modellingAuthority(),
+                row.timestamp(), row.version(), row.clonedFrom(), row.eq(), row.ssh(), row.caseDate(), row.status(),
+                reasons);
     }
 
     private static VariantRow unboundRow(String variantId) {
@@ -904,31 +1093,11 @@ public final class RdfDbUtil {
     }
 
     private static VariantRow boundRow(VariantBinding binding, String status) {
-        String timestep = text(binding.timestep());
         return new VariantRow(binding.variantId(), text(binding.scenario()), text(binding.snapshotIri()),
-                text(binding.version()), timestep, labelOf(timestep, binding), text(binding.clonedFrom()),
-                text(binding.modelIds().get(CgmesSubset.EQUIPMENT)),
+                text(binding.modellingAuthority()), text(binding.timestamp()), text(binding.version()),
+                text(binding.clonedFrom()), text(binding.modelIds().get(CgmesSubset.EQUIPMENT)),
                 text(binding.modelIds().get(CgmesSubset.STEADY_STATE_HYPOTHESIS)),
                 binding.caseDate() == null ? "" : binding.caseDate().toString(), status, "");
-    }
-
-    /**
-     * The {@code HH:MM} a timestep shows as.
-     *
-     * <p>A label is a wall time of the scenario's own day, so it needs the offset that day is written in. The
-     * catalogue holds it, but this call takes no connection; the case date of the very snapshot carries the same
-     * offset, and is used instead. A binding without a case date gets no label rather than a wrong one.</p>
-     */
-    private static String labelOf(String timestep, VariantBinding binding) {
-        if (timestep.isEmpty() || binding.caseDate() == null) {
-            return "";
-        }
-        try {
-            return Timesteps.label(timestep, Timesteps.offsetOf(binding.caseDate()));
-        } catch (RuntimeException e) {
-            // A timestep that is not a canonical instant has no label; it is not worth failing a table for
-            return "";
-        }
     }
 
     /** The export options a caller may not set, because the address decides them. */
@@ -937,7 +1106,7 @@ public final class RdfDbUtil {
         for (String decided : DATABASE_DECIDED_OPTIONS) {
             if (rest.containsKey(decided)) {
                 throw new PowsyblException("Export option '" + decided + "' is decided by the database (scenario,"
-                        + " snapshot version and timestep)");
+                        + " modelling authority, timestamp and version of the snapshot)");
             }
         }
         return rest;
@@ -1006,17 +1175,19 @@ public final class RdfDbUtil {
     /**
      * Materialise a snapshot as a full state, so that loading it needs no chain walk.
      *
-     * @param db       the open connection
-     * @param scenario the scenario
-     * @param version  the version label, {@code null} for the newest one
-     * @param timestep the timestep text, {@code null} for the base timestep
+     * @param db                 the open connection
+     * @param scenario           the scenario
+     * @param version            the version, {@code null} for the newest one
+     * @param timestamp          the timestamp, {@code null} or empty for the base timestamp
+     * @param modellingAuthority the modelling authority, {@code null} or empty for the only one of the scenario
      * @return the IRI of the snapshot that was materialised
      */
-    public static String checkpoint(RdfDbConnection db, String scenario, String version, String timestep) {
+    public static String checkpoint(RdfDbConnection db, String scenario, Integer version, String timestamp,
+                                    String modellingAuthority) {
         requireScenario(scenario);
         SnapshotCatalog catalog = db.snapshots(scenario);
-        return Checkpoint.create(db,
-                SnapshotRef.of(blankToNull(version), blankToNull(timestep), catalog)).iri();
+        return Checkpoint.create(db, SnapshotRef.of(scenario, authority(catalog, modellingAuthority),
+                toInstant(timestamp), version)).iri();
     }
 
     /**
@@ -1034,10 +1205,17 @@ public final class RdfDbUtil {
     }
 
     /**
-     * @return the mapper turning a timestep list into a dataframe
+     * @return the mapper turning a timestamp list into a dataframe
      */
-    public static DataframeMapper<List<SnapshotCatalog.TimestepInfo>, Void> timestepsMapper() {
-        return TIMESTEPS_MAPPER;
+    public static DataframeMapper<List<SnapshotCatalog.TimestampInfo>, Void> timestampsMapper() {
+        return TIMESTAMPS_MAPPER;
+    }
+
+    /**
+     * @return the mapper turning an assembly (one snapshot per modelling authority) into a dataframe
+     */
+    public static DataframeMapper<List<AssemblyRow>, Void> assemblyMapper() {
+        return ASSEMBLY_MAPPER;
     }
 
     /**
@@ -1072,7 +1250,7 @@ public final class RdfDbUtil {
 
     /**
      * Turn the empty string the C API uses for "not given" into {@code null}; used for every optional text
-     * argument (version, timestep, variant).
+     * argument (timestamp, modelling authority, variant).
      *
      * @param text the value a caller gave
      * @return the value, or {@code null} when it was {@code null}, empty or blank
@@ -1081,8 +1259,13 @@ public final class RdfDbUtil {
         return text == null || text.isBlank() ? null : text;
     }
 
-    private static String text(String value) {
-        return value == null ? "" : value;
+    private static String text(Object value) {
+        return value == null ? "" : value.toString();
+    }
+
+    /** The identifiers of a set of profiles in the order of the enum, {@code ;} joined. */
+    private static String profileNames(Set<CgmesSubset> profiles) {
+        return profiles.stream().sorted().map(CgmesSubset::getIdentifier).collect(Collectors.joining(";"));
     }
 
     private static String edgeName(SnapshotInfo info) {
@@ -1095,7 +1278,7 @@ public final class RdfDbUtil {
         RdfDbProvenance provenance = network.getExtension(RdfDbProvenance.class);
         if (provenance != null) {
             identity.put(SCENARIO, provenance.scenario());
-            provenance.snapshot().ifPresent(iri -> identity.put(SNAPSHOT, iri));
+            provenance.snapshot().ifPresent(iri -> putAddress(identity, iri));
             provenance.modelIds().forEach((subset, id) -> identity.put(subset.getIdentifier(), id));
         }
         CgmesMetadataModels models = network.getExtension(CgmesMetadataModels.class);
@@ -1106,13 +1289,22 @@ public final class RdfDbUtil {
         return identity;
     }
 
+    /** The snapshot and its address, read off the IRI without a request. */
+    private static void putAddress(Map<String, String> identity, String snapshotIri) {
+        identity.put(SNAPSHOT, snapshotIri);
+        SnapshotRef ref = RdfDbNames.refOf(snapshotIri);
+        if (ref != null) {
+            identity.put(MODELLING_AUTHORITY, text(ref.modellingAuthority()));
+            identity.put(TIMESTAMP, text(ref.timestamp()));
+            identity.put(VERSION, text(ref.version()));
+        }
+    }
+
     private static void putSnapshot(Map<String, String> identity, SnapshotInfo info) {
         identity.put(SNAPSHOT, info.iri());
         identity.put(SCENARIO, info.scenario());
-        identity.put(VERSION, info.version());
-        identity.put(TIMESTEP, info.timestep());
-        if (info.timestepLabel() != null) {
-            identity.put(LABEL, info.timestepLabel());
-        }
+        identity.put(MODELLING_AUTHORITY, info.modellingAuthority());
+        identity.put(TIMESTAMP, info.timestamp().toString());
+        identity.put(VERSION, Integer.toString(info.version()));
     }
 }
