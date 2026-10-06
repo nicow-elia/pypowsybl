@@ -96,6 +96,19 @@ def other_tso_zip(suffix: str) -> io.BytesIO:
     return buffer
 
 
+def _state_variables_only(suffix: str) -> io.BytesIO:
+    """The state variables file of ``CGMES_Full.zip`` alone, under a model identifier of its own."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(CGMES_ZIP) as source, zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as target:
+        for entry in source.namelist():
+            if entry.endswith('_SV.xml'):
+                content = source.read(entry).decode('utf-8')
+                target.writestr(entry, re.sub(r'(<md:FullModel[^>]*rdf:about=")([^"]*)(")',
+                                              r'\g<1>\g<2>' + suffix + r'\g<3>', content))
+    buffer.seek(0)
+    return buffer
+
+
 def test_followup_usage_pattern(rdf_db_url: str, scenario: str) -> None:
     """The snippet of the follow-up specification, verbatim except for the scenario argument."""
     database = rdf_db_url
@@ -297,6 +310,40 @@ def test_a_write_into_a_scenario_of_one_tree_goes_into_that_tree(rdf_db_url: str
         assert db.timestamps(scenario).index.tolist() == [BASE, at('20:00'), at('20:30')]
         reader = pp.network.from_rdf_db(db, scenario, None, at('20:30'), parameters=PARAMS)
         assert reader.get_loads().loc[load, 'p0'] == pytest.approx(333.0)
+
+
+def test_a_projected_load_keeps_the_boundary(rdf_db_url: str, scenario: str) -> None:
+    """``profiles`` naming every profile but the boundary loads the boundary all the same: the full network."""
+    other = 'http://tennet.nl/CGMES'
+    with pp.network.connect(rdf_db_url) as db:
+        _root(db, scenario)
+        db.load_cgmes_from_binary_buffers([other_tso_zip('-' + scenario)], scenario, 1, None, other,
+                                          parameters=PARAMS)
+        for authority in (AUTHORITY, other):
+            full = pp.network.from_rdf_db(db, scenario, 1, None, authority, parameters=PARAMS)
+            projected = pp.network.from_rdf_db(db, scenario, 1, None, authority, ['EQ', 'SSH', 'TP', 'SV'],
+                                               parameters=PARAMS)
+            assert_same_network(full, projected, rdf_db_url)
+
+
+def test_a_set_without_equipment_or_steady_state_hypothesis_names_its_authority(rdf_db_url: str,
+                                                                                 scenario: str) -> None:
+    """
+    Only the equipment and the steady state hypothesis decide an open modelling authority: a set of instance files
+    with neither of the two is refused where the authority is not the scenario's only one, and nothing is stored.
+    """
+    other = 'http://tennet.nl/CGMES'
+    with pp.network.connect(rdf_db_url) as db:
+        _root(db, scenario)
+        db.load_cgmes_from_binary_buffers([other_tso_zip('-' + scenario)], scenario, 1, None, other,
+                                          parameters=PARAMS)
+        before = len(db.snapshots(scenario))
+        with pytest.raises(PyPowsyblError, match=re.escape(
+                'but no equipment or steady state hypothesis member states one, and only those two decide the '
+                'modelling authority of an address that names none: pass the modelling authority in the address')):
+            db.load_cgmes_from_binary_buffers([_state_variables_only('-' + scenario)], scenario, None, at('20:00'),
+                                              profiles=['SV'], parameters=PARAMS)
+        assert len(db.snapshots(scenario)) == before, 'nothing is stored'
 
 
 def test_two_modelling_authorities(rdf_db_url: str, scenario: str) -> None:
