@@ -30,8 +30,10 @@ import java.util.regex.Pattern;
 
 import static com.powsybl.python.network.RdfDbTestSupport.columns;
 import static com.powsybl.python.network.RdfDbUtilTest.importParameters;
+import static com.powsybl.python.network.RdfDbUtilTest.importProperties;
 import static com.powsybl.python.network.RdfDbUtilTest.memoryUrl;
 import static com.powsybl.python.network.RdfDbUtilTest.microGridBe;
+import static com.powsybl.python.network.RdfDbUtilTest.xiidm;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -144,7 +146,10 @@ class RdfDbUtilVersionedTest {
         }
     }
 
-    /** A second TSO's tree in the same scenario: from then on an open authority is ambiguous and is refused. */
+    /**
+     * A second TSO's tree in the same scenario: from then on an open authority is ambiguous and is refused, and the
+     * named one loads the second TSO's network as its files do.
+     */
     @Test
     void twoModellingAuthoritiesMustBeNamed() {
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
@@ -164,8 +169,12 @@ class RdfDbUtilVersionedTest {
                         .hasMessageContaining("[" + BE + ", " + NL + "]")
                         .hasMessageContaining("cannot be left open");
             }
-            // named, every read works; loading the NL network itself is left out: core R2 cannot yet convert the
-            // second authority of a scenario, whose shared boundary was parsed with the first one's files
+            // named, every read works - including the network of the second authority, whose boundary is the one
+            // the first stored
+            Network nl = RdfDbUtil.load(db, S, 1, null, NL, List.of(), importParameters(), List.of(), null);
+            assertEquals(xiidm(Network.read(CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(),
+                    importProperties())), xiidm(nl));
+            assertEquals(NL, RdfDbUtil.identity(nl, db, S).get(RdfDbUtil.MODELLING_AUTHORITY));
             assertEquals(1, RdfDbUtil.versions(db, S, BASE, NL).size());
             assertEquals(1, RdfDbUtil.timestamps(db, S, NL).size());
             assertThat(RdfDbUtil.checkpoint(db, S, 1, null, BE)).contains("snapshot");

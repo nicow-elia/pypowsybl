@@ -38,6 +38,7 @@ from rdf_db_fixtures import (AUTHORITY, BASE, CGMES_ZIP, NEXT_DAY, at, drifted_n
                              ssh_variant)
 from test_network_event_recorder import (apply_five_changes, assert_same_setpoints, first_id,
                                          other_tap)
+from test_rdf_db import assert_same_network
 
 PARAMS = {'iidm.import.cgmes.create-cgmes-export-mapping': 'true'}
 
@@ -288,6 +289,11 @@ def test_two_modelling_authorities(rdf_db_url: str, scenario: str) -> None:
 
         named = pp.network.from_rdf_db(db, scenario, 1, None, AUTHORITY, parameters=PARAMS)
         assert named.rdf_db_identity()['modelling_authority'] == AUTHORITY
+        # the second tree loads too, with the boundary the first one stored, and is the grid its files describe
+        second = pp.network.from_rdf_db(db, scenario, 1, None, other, parameters=PARAMS)
+        assert second.rdf_db_identity()['modelling_authority'] == other
+        assert_same_network(pp.network.load_from_binary_buffer(_other_tso_zip('-' + scenario), PARAMS), second,
+                            rdf_db_url)
 
         assembly = db.assembly(scenario, BASE)
         assert assembly.index.name == 'modelling_authority'
