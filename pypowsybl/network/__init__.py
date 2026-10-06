@@ -19,8 +19,8 @@ from .impl.rdf_db import (
     connect_rdf_db,
     connect,
     from_rdf_db,
-    Timestep,
-    VariantAddress,
+    Profile,
+    SnapshotAddress,
 )
 from .impl.node_breaker_topology import NodeBreakerTopology
 from .impl.sld_parameters import SldParameters

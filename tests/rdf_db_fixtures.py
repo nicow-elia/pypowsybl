@@ -7,7 +7,7 @@
 #
 """
 Fixtures of the versioned RDF database tests: the base grid model, a copy of it describing the next day, the
-steady state of a timestep and a timestep whose equipment model drifted.
+steady state of a timestamp and a timestamp whose equipment model drifted.
 
 They are the generators the notebooks use, ``examples/notebooks/notebook_utils.py``: that copy is the one users
 read and it has to run without the test suite, so the tests import it rather than keep a second one.
@@ -20,6 +20,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'examples' / 'notebooks'))
 
 # pylint: disable=wrong-import-position,unused-import
-from notebook_utils import CGMES_ZIP, NEXT_DAY, drifted_name, eq_drift, next_day_zip, ssh_variant  # noqa: E402,F401
+from notebook_utils import (AUTHORITY, BASE, CGMES_ZIP, NEXT_DAY, at, drifted_name, eq_drift,  # noqa: E402,F401
+                            next_day_zip, ssh_variant)
 
-__all__ = ['CGMES_ZIP', 'NEXT_DAY', 'drifted_name', 'eq_drift', 'next_day_zip', 'ssh_variant']
+__all__ = ['AUTHORITY', 'BASE', 'CGMES_ZIP', 'NEXT_DAY', 'at', 'drifted_name', 'eq_drift', 'next_day_zip',
+           'ssh_variant']
