@@ -25,6 +25,7 @@ import java.nio.charset.StandardCharsets;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.function.BinaryOperator;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -64,6 +65,8 @@ class RdfDbUtilVersionedTest {
     static final String T0830 = "2014-06-01T08:30:00Z";
     static final String T0845 = "2014-06-01T08:45:00Z";
     static final String T0930 = "2014-06-01T09:30:00Z";
+    /** The modelling authority the steady state hypothesis of {@link #disagreeing} files claims. */
+    static final String ELSEWHERE = "http://elsewhere.eu/CGMES";
 
     /** Store the base grid model as the root of {@code scenario}, and the second model as the root of "other". */
     static Network twoScenarios(RdfDbConnection db) {
@@ -143,6 +146,71 @@ class RdfDbUtilVersionedTest {
             assertEquals(BE, own.get(RdfDbUtil.MODELLING_AUTHORITY));
             assertEquals(T0830, own.get(RdfDbUtil.TIMESTAMP));
             assertEquals("2", own.get(RdfDbUtil.VERSION));
+        }
+    }
+
+    /**
+     * A write into a scenario that holds exactly one tree resolves an open modelling authority to that tree, as a
+     * read does - an ingestion ({@code putAsDiff}), an export ({@code putDiff}) and a checkpoint alike, even when the
+     * files' headers disagree or the network is at no snapshot of the database. The first root of a scenario has no
+     * tree to resolve to, and a scenario of several trees no single one: there the files (or the network) decide.
+     *
+     * @param scenario a scenario of its own, empty
+     * @param fresh    another empty scenario
+     */
+    static void anOpenAuthorityOfAWriteIsTheOnlyTreeOfTheScenario(RdfDbConnection db, String scenario, String fresh) {
+        assertThatThrownBy(() -> ingest(db, fresh, disagreeing(microGridBe()), 1, null))
+                .as("a first root: the files decide, and these disagree")
+                .isInstanceOf(PowsyblException.class)
+                .hasMessageContaining("do not agree on one");
+        assertFalse(RdfDbUtil.isVersioned(db, fresh));
+
+        assertThat(ingest(db, scenario, microGridBe(), 1, null)).isNotEmpty();
+        double before = load(db, scenario, 1, null).getLoads().iterator().next().getP0();
+        assertThat(ingest(db, scenario, disagreeing(timestampFiles("open", 1.5, T0830, false)), null, T0830))
+                .isNotEmpty();
+        Network fromFiles = Network.read(microGridBe(), importProperties());
+        assertThat(exportLoad(db, fromFiles, scenario, T0845, 44.0)).isNotEmpty();
+        String checkpoint = RdfDbUtil.checkpoint(db, scenario, null, T0845, null);
+
+        assertThat(RdfDbUtil.snapshots(db, scenario)).hasSize(3)
+                .allMatch(info -> BE.equals(info.modellingAuthority()))
+                .anyMatch(info -> info.iri().equals(checkpoint) && info.hasFull());
+        assertEquals(before * 1.5, load(db, scenario, null, T0830).getLoads().iterator().next().getP0(), 1e-6);
+        assertEquals(44.0, load(db, scenario, null, T0845).getLoads().iterator().next().getP0(), 1e-9);
+
+        assertThat(RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), scenario, 1,
+                null, NL, List.of(), importParameters(), null)).isNotEmpty();
+        assertThatThrownBy(() -> ingest(db, scenario, disagreeing(timestampFiles("two", 2.0, T0930, false)), null,
+                T0930))
+                .as("two trees: the files decide again")
+                .isInstanceOf(PowsyblException.class)
+                .hasMessageContaining("do not agree on one");
+        Network again = Network.read(microGridBe(), importProperties());
+        assertThatThrownBy(() -> exportLoad(db, again, scenario, T0930, 45.0))
+                .as("two trees: the network decides again")
+                .isInstanceOf(PowsyblException.class)
+                .hasMessageContaining("is at no snapshot");
+        assertThatThrownBy(() -> RdfDbUtil.checkpoint(db, scenario, null, T0845, null))
+                .isInstanceOf(PowsyblException.class)
+                .hasMessageContaining("cannot be left open");
+        assertThat(RdfDbUtil.snapshots(db, scenario)).hasSize(4);
+    }
+
+    /** Move one load of {@code network} and store the change at {@code timestamp}, the authority left open. */
+    private static List<String> exportLoad(RdfDbConnection db, Network network, String scenario, String timestamp,
+                                           double value) {
+        NetworkEventRecording recording = new NetworkEventRecording(network);
+        recording.start();
+        network.getLoads().iterator().next().setP0(value);
+        recording.stop();
+        return export(recording, db, scenario, null, timestamp, Map.of());
+    }
+
+    @Test
+    void anOpenAuthorityOfAWriteIsTheOnlyTreeOfTheScenario() {
+        try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
+            anOpenAuthorityOfAWriteIsTheOnlyTreeOfTheScenario(db, S, "fresh");
         }
     }
 
@@ -378,7 +446,38 @@ class RdfDbUtilVersionedTest {
      *                 apply, so the difference is stored but is not fast-route capable
      */
     static ReadOnlyDataSource timestampFiles(String suffix, double factor, String instant, boolean eqDrift) {
-        ReadOnlyDataSource source = microGridBe();
+        return rewrite(microGridBe(), (name, content) -> {
+            if (name.contains("_SSH_")) {
+                String ssh = content.replaceFirst("(?s)(<md:FullModel[^>]*rdf:about=\")[^\"]*(\")",
+                        "$1urn:uuid:ssh-" + suffix + "$2");
+                ssh = ssh.replaceFirst("(<md:Model\\.scenarioTime>)[^<]*(</md:Model\\.scenarioTime>)",
+                        "$1" + instant + "$2");
+                return scaleConsumers(ssh, factor);
+            }
+            if (eqDrift && name.contains("_EQ_") && !name.contains("_EQ_BD")) {
+                String eq = content.replaceFirst("(?s)(<md:FullModel[^>]*rdf:about=\")[^\"]*(\")",
+                        "$1urn:uuid:eq-" + suffix + "$2");
+                return eq.replaceFirst("(?s)(<cim:ACLineSegment[^>]*>.*?<cim:IdentifiedObject.name>)"
+                        + "[^<]*(</cim:IdentifiedObject.name>)", "$1drifted-" + suffix + "$2");
+            }
+            return content;
+        });
+    }
+
+    /**
+     * The given files with the steady state hypothesis claiming the modelling authority {@link #ELSEWHERE}, so that
+     * the equipment and steady state hypothesis headers disagree - as those of {@code CGMES_Full.zip} do - and an
+     * open authority cannot be read off the files.
+     */
+    static ReadOnlyDataSource disagreeing(ReadOnlyDataSource files) {
+        return rewrite(files, (name, content) -> name.contains("_SSH_")
+                ? content.replaceFirst("(<md:Model\\.modelingAuthoritySet>)[^<]*"
+                        + "(</md:Model\\.modelingAuthoritySet>)", "$1" + ELSEWHERE + "$2")
+                : content);
+    }
+
+    /** A copy of every file of {@code source}, each one's content passed through {@code edit(name, content)}. */
+    private static ReadOnlyDataSource rewrite(ReadOnlyDataSource source, BinaryOperator<String> edit) {
         MemDataSource target = new MemDataSource();
         try {
             for (String name : source.listNames(".*")) {
@@ -386,20 +485,8 @@ class RdfDbUtilVersionedTest {
                 try (InputStream stream = source.newInputStream(name)) {
                     content = new String(stream.readAllBytes(), StandardCharsets.UTF_8);
                 }
-                if (name.contains("_SSH_")) {
-                    content = content.replaceFirst("(?s)(<md:FullModel[^>]*rdf:about=\")[^\"]*(\")",
-                            "$1urn:uuid:ssh-" + suffix + "$2");
-                    content = content.replaceFirst("(<md:Model\\.scenarioTime>)[^<]*(</md:Model\\.scenarioTime>)",
-                            "$1" + instant + "$2");
-                    content = scaleConsumers(content, factor);
-                } else if (eqDrift && name.contains("_EQ_") && !name.contains("_EQ_BD")) {
-                    content = content.replaceFirst("(?s)(<md:FullModel[^>]*rdf:about=\")[^\"]*(\")",
-                            "$1urn:uuid:eq-" + suffix + "$2");
-                    content = content.replaceFirst("(?s)(<cim:ACLineSegment[^>]*>.*?<cim:IdentifiedObject.name>)"
-                            + "[^<]*(</cim:IdentifiedObject.name>)", "$1drifted-" + suffix + "$2");
-                }
                 try (OutputStream out = target.newOutputStream(name, false)) {
-                    out.write(content.getBytes(StandardCharsets.UTF_8));
+                    out.write(edit.apply(name, content).getBytes(StandardCharsets.UTF_8));
                 }
             }
         } catch (IOException e) {

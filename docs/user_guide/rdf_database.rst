@@ -202,7 +202,8 @@ address, written in this order everywhere:
      - the base timestamp of the tree
    * - ``modelling_authority``
      - ``str``, the files' ``md:Model.modelingAuthoritySet``
-     - the only authority of the scenario (refused, with the list, when it holds several); a write takes it from
+     - the only authority of the scenario, for a read and a write alike (a read is refused, with the list, when
+       it holds several); the first root of a scenario - and a write into a scenario of several - takes it from
        the equipment and steady state hypothesis headers of the files when they agree, and is refused otherwise
 
 A **timestamp** is an instant. Pass an aware datetime - ``datetime(2021, 2, 9, 20, 30, tzinfo=timezone.utc)``, or
@@ -252,10 +253,13 @@ Storing changes from a recorder
 -------------------------------
 
 One snapshot is stored under one modelling authority; the files it carries may come from several. A write that
-names the authority takes it whatever the files state. One that leaves it open takes the authority the equipment
-and the steady state hypothesis files agree on, and is refused otherwise, naming the authority of every profile.
-``data/CGMES_Full.zip`` is such a case - its EQ and TP say ``powsybl.org``, its SSH Elia, its SV TenneT - so the
-examples below name Elia on every write. Reads leave it open: the scenario holds one tree.
+names the authority takes it whatever the files state. One that leaves it open writes into the scenario's tree
+when the scenario holds exactly one, as a read does - a further set of files, a recorder's changes and a
+checkpoint alike. Where there is no single tree - the first root of a scenario, or a scenario of several - it
+takes the authority the equipment and the steady state hypothesis files agree on, and is refused otherwise,
+naming the authority of every profile. ``data/CGMES_Full.zip`` is such a case - its EQ and TP say
+``powsybl.org``, its SSH Elia, its SV TenneT - so the examples below name Elia when they store a root.
+Everything after that may leave it open: the scenario holds one tree.
 
 .. testcode::
 

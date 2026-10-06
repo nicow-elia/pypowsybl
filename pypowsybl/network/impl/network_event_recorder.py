@@ -341,7 +341,8 @@ class NetworkEventRecorder:
                 ``None`` takes the head's plus one, 1 on a new timestamp
             timestamp: the moment the new snapshot describes, a timezone-aware :class:`datetime.datetime`;
                 ``None`` is the base timestamp
-            modelling_authority: the tree to write into; ``None`` for the one of the snapshot the network is at
+            modelling_authority: the tree to write into; ``None`` for the only tree of the scenario, or - when it
+                holds several - the one of the snapshot the network is at
             profiles: the CGMES profiles the difference may write, see :data:`pypowsybl.network.Profile`;
                 ``None`` for every profile a change touches. A change of another profile is an unsupported change,
                 handled as ``unsupported`` says

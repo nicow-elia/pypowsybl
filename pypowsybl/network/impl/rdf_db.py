@@ -516,8 +516,10 @@ class RdfDatabase:
             version: the version of the snapshot; ``None`` takes the head's plus one (1 for a new timestamp)
             timestamp: the moment the files describe, a timezone-aware datetime. ``None`` is the base timestamp,
                 which for a root is taken from ``md:Model.scenarioTime`` of the steady state file
-            modelling_authority: the tree the files belong to; ``None`` takes it from the files' headers. Adding
-                the tree of a *second* authority to a versioned scenario names it
+            modelling_authority: the tree the files belong to. ``None`` is the only tree of a scenario that holds
+                one, whatever the files' headers state; for the first root of a scenario, or a scenario of several
+                trees, it is the authority the equipment and steady state hypothesis headers agree on (refused when
+                they do not). Adding the tree of a *second* authority to a versioned scenario names it
             profiles: for a root, the profiles to store (``None``: every profile the files carry); for a further
                 snapshot, the profiles to compare (``None``: ``EQ`` and ``SSH``)
             parameters: a dictionary of CGMES import parameters; only the ones that influence how identifiers are
@@ -558,7 +560,7 @@ class RdfDatabase:
             scenario: the scenario to write into
             version: the version of the snapshot, ``None`` for the next one
             timestamp: the moment the files describe, a timezone-aware datetime; ``None`` for the base timestamp
-            modelling_authority: the tree the files belong to, ``None`` to take it from the files
+            modelling_authority: the tree the files belong to; ``None`` as in :meth:`load_cgmes`
             profiles: the profiles to store or compare, ``None`` for the default
             parameters: a dictionary of CGMES import parameters
             report_node: the reporter to be used to create an execution report, default is None (no report)

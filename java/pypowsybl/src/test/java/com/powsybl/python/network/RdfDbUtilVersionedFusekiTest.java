@@ -121,4 +121,12 @@ class RdfDbUtilVersionedFusekiTest extends AbstractFusekiTest {
             assertThat(RdfDbUtil.replacement(outcome)).isNotSameAs(network);
         }
     }
+
+    @Test
+    void anOpenAuthorityOfAWriteIsTheOnlyTreeOfTheScenarioOverHttp() {
+        try (RdfDbConnection db = RdfDbUtil.open(datasetUrl(), Map.of())) {
+            RdfDbUtilVersionedTest.anOpenAuthorityOfAWriteIsTheOnlyTreeOfTheScenario(db, scenario("open"),
+                    scenario("fresh"));
+        }
+    }
 }

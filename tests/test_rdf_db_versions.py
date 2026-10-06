@@ -18,8 +18,8 @@ gets in). They end up in the same chain and are read back the same way.
 
 **The address** is ``(scenario, version, timestamp, modelling_authority)``: an ``int`` version, a timezone-aware
 datetime and the modelling authority the snapshot is stored under. ``CGMES_Full.zip`` states one per profile, so
-every write here names :data:`AUTHORITY`; reads leave it open (``None``), which resolves to the only authority of
-the scenario.
+the first root of a scenario names :data:`AUTHORITY`; after that an open authority (``None``) resolves to the only
+tree of the scenario, for a read and a write alike.
 """
 import io
 import pickle
@@ -249,26 +249,54 @@ def test_profiles_literal(rdf_db_url: str, scenario: str) -> None:
 def test_files_of_several_authorities_need_one_named(rdf_db_url: str, scenario: str) -> None:
     """
     ``CGMES_Full.zip`` states one modelling authority per profile, and a snapshot is stored under exactly one: the
-    equipment and steady state hypothesis files disagree, so a write that leaves the authority open is refused with
-    the authority of every profile, and nothing is stored. Naming one stores the files under it.
+    equipment and steady state hypothesis files disagree, so a write that leaves the authority open where there is
+    no single tree to write into - the first root of a scenario, or a scenario of two trees - is refused with the
+    authority of every profile, and nothing is stored. Naming one stores the files under it.
     """
+    other = 'http://tennet.nl/CGMES'
     with pp.network.connect(rdf_db_url) as db:
         with pytest.raises(PyPowsyblError, match='state the modelling authorities') as root:
             db.load_cgmes(CGMES_ZIP, scenario, 1, parameters=PARAMS)
         assert not db.versioned(scenario) and db.modelling_authorities(scenario) == []
 
         _root(db, scenario)
+        db.load_cgmes_from_binary_buffers([_other_tso_zip('-' + scenario)], scenario, 1, None, other,
+                                          parameters=PARAMS)
         with pytest.raises(PyPowsyblError, match='state the modelling authorities') as further:
-            db.load_cgmes_from_binary_buffers([ssh_variant(1, at('20:00'))], scenario, None, at('20:00'),
-                                              parameters=PARAMS)
-        assert db.modelling_authorities(scenario) == [AUTHORITY]
-        assert db.timestamps(scenario).index.tolist() == [BASE], 'the refused timestamp is not stored'
+            db.load_cgmes_from_binary_buffers([ssh_variant(1, at('20:00'), suffix=scenario)], scenario, None,
+                                              at('20:00'), parameters=PARAMS)
+        assert db.modelling_authorities(scenario) == [AUTHORITY, other]
+        assert db.timestamps(scenario, AUTHORITY).index.tolist() == [BASE], 'the refused timestamp is not stored'
 
     for refusal in (root, further):
         message = str(refusal.value)
         for stated in ('EQ=powsybl.org', f'SSH={AUTHORITY}', 'SV=http://tennet.nl/CGMES',
                        'do not agree on one: pass the modelling authority in the address'):
             assert stated in message, f'{stated!r} is missing from: {message}'
+
+
+def test_a_write_into_a_scenario_of_one_tree_goes_into_that_tree(rdf_db_url: str, scenario: str) -> None:
+    """
+    Once a scenario holds one tree, a write that leaves the authority open goes into it, as a read does - whatever
+    the files' headers state (an ingestion), whether the network is at a snapshot of the database or not (a
+    recorder), and for a checkpoint.
+    """
+    with pp.network.connect(rdf_db_url) as db:
+        _root(db, scenario)
+        db.load_cgmes_from_binary_buffers([ssh_variant(1, at('20:00'), suffix=scenario)], scenario, None,
+                                          at('20:00'), parameters=PARAMS)
+        from_files = pp.network.load(CGMES_ZIP, PARAMS)
+        with from_files.event_recorder() as recorder:
+            load = _change_a_load(from_files, 333.0)
+            assert recorder.to_rdf_updates(db, scenario, None, at('20:30'))
+        iri = db.checkpoint(scenario, None, at('20:30'))
+
+        snapshots = db.snapshots(scenario)
+        assert snapshots['modelling_authority'].tolist() == [AUTHORITY] * 3
+        assert bool(snapshots.loc[iri, 'has_full'])
+        assert db.timestamps(scenario).index.tolist() == [BASE, at('20:00'), at('20:30')]
+        reader = pp.network.from_rdf_db(db, scenario, None, at('20:30'), parameters=PARAMS)
+        assert reader.get_loads().loc[load, 'p0'] == pytest.approx(333.0)
 
 
 def test_two_modelling_authorities(rdf_db_url: str, scenario: str) -> None:
