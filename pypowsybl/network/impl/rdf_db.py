@@ -759,9 +759,13 @@ def from_rdf_db(db: RdfDatabase, scenario: str, version: Optional[int] = None,
         modelling_authority: the tree to load from; ``None`` for the only one of the scenario
         profiles: the CGMES profiles to load, see :data:`Profile`; ``None`` loads every profile of the snapshot.
             With ``timestamps``/``variants`` they are the profiles each variant is brought forward by
-        timestamps: load these timestamps as the variants of one network, each at ``version``. The variants are
-            named after their ISO instant (``'2021-02-09T08:30:00Z'``), or ``version@instant`` when two requests
-            share an instant. Exclusive with ``timestamp`` and with ``variants``
+        timestamps: load these timestamps as the variants of one network, each at ``version`` in the tree of
+            ``modelling_authority``. The variants are named after their ISO instant (``'2021-02-09T08:30:00Z'``).
+            That is the short form of the default naming of the core library, which says ``version@instant`` when
+            two requests share an instant and ``authority/version@instant`` (for instance
+            ``'http://elia.be/CGMES/1@2021-02-09T08:30:00Z'``) when the requests span several modelling
+            authorities - decided by the requests, never by what else the scenario holds. Exclusive with
+            ``timestamp`` and with ``variants``
         variants: the same, with the variant names chosen by the caller: ``{'morning': t}``, or
             ``{'morning': (2, t, None)}`` - ``(version, timestamp, modelling_authority)`` - when that variant is at
             another address than the call's

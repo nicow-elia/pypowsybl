@@ -39,6 +39,7 @@ from pypowsybl import PyPowsyblError
 from pypowsybl.network import RdfDbVariantRefusedError
 from pypowsybl.network.impl.rdf_db import _split_reasons
 from rdf_db_fixtures import AUTHORITY, CGMES_ZIP, at, drifted_name, eq_drift, ssh_variant
+from test_rdf_db_versions import other_tso_zip
 
 PARAMS = {'iidm.import.cgmes.create-cgmes-export-mapping': 'true'}
 T2000, T2015, T2030, T2100 = at('20:00'), at('20:15'), at('20:30'), at('21:00')
@@ -106,6 +107,23 @@ def test_a_day_as_variants_equals_a_load_per_timestamp(rdf_db_url: str, scenario
 
         # and the comparison above is not vacuous: the variants really do differ from one another
         assert not _loads(day, NAMES[0]).equals(_loads(day, NAMES[-1]))
+
+
+def test_the_default_names_of_a_day_are_its_instants(rdf_db_url: str, scenario: str) -> None:
+    """
+    ``timestamps=[...]`` names each variant after its ISO instant. The longer default names of the core library -
+    ``version@instant`` when two requests share an instant, ``authority/version@instant`` when the requests span
+    several modelling authorities - are decided by the request list, not by the scenario: one version and one
+    authority per call keep the instants, also in a scenario that holds the tree of a second authority.
+    """
+    other = 'http://tennet.nl/CGMES'
+    with pp.network.connect(rdf_db_url) as db:
+        _a_day(db, scenario)
+        db.load_cgmes_from_binary_buffers([other_tso_zip('-' + scenario)], scenario, 1, None, other,
+                                          parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, 1, None, AUTHORITY, timestamps=MOMENTS, parameters=PARAMS)
+        assert sorted(day.get_variant_ids()) == sorted(NAMES + ['InitialState'])
+        assert {_binding(day)[name]['modelling_authority'] for name in NAMES} == {AUTHORITY}
 
 
 def test_variants_are_isolated_from_each_other(rdf_db_url: str, scenario: str) -> None:

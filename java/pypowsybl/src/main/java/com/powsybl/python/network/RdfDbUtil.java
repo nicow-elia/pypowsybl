@@ -950,8 +950,9 @@ public final class RdfDbUtil {
      * Load many snapshots of one scenario as the variants of a single network.
      *
      * <p>Four parallel arrays, because that is what crosses the native boundary cheaply. An empty variant
-     * identifier lets the naming rule of core decide (the ISO instant of the snapshot, or {@code version@instant}
-     * when two requests share an instant); a {@code null} version is the newest one of that timestamp; an empty
+     * identifier lets the naming rule of core decide (the ISO instant of the snapshot; {@code version@instant}
+     * when two requests share an instant; {@code authority/version@instant} when the requests span several modelling
+     * authorities); a {@code null} version is the newest one of that timestamp; an empty
      * timestamp is the base timestamp; an empty modelling authority is the only one of the scenario.</p>
      *
      * <p>A snapshot that cannot be reached inside a variant does not fail the load: its variant is not created and

@@ -80,7 +80,7 @@ _SNAPSHOT_COLUMNS = ['scenario', 'modelling_authority', 'timestamp', 'version', 
                      'edge', 'depth', 'has_full', 'fast', 'members', 'created', 'description']
 
 
-def _other_tso_zip(suffix: str) -> io.BytesIO:
+def other_tso_zip(suffix: str) -> io.BytesIO:
     """``CGMES_Full.zip`` as the files of another TSO of the same day: other model ids, the same boundary."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(CGMES_ZIP) as source, zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as target:
@@ -260,7 +260,7 @@ def test_files_of_several_authorities_need_one_named(rdf_db_url: str, scenario: 
         assert not db.versioned(scenario) and db.modelling_authorities(scenario) == []
 
         _root(db, scenario)
-        db.load_cgmes_from_binary_buffers([_other_tso_zip('-' + scenario)], scenario, 1, None, other,
+        db.load_cgmes_from_binary_buffers([other_tso_zip('-' + scenario)], scenario, 1, None, other,
                                           parameters=PARAMS)
         with pytest.raises(PyPowsyblError, match='state the modelling authorities') as further:
             db.load_cgmes_from_binary_buffers([ssh_variant(1, at('20:00'), suffix=scenario)], scenario, None,
@@ -304,7 +304,7 @@ def test_two_modelling_authorities(rdf_db_url: str, scenario: str) -> None:
     other = 'http://tennet.nl/CGMES'
     with pp.network.connect(rdf_db_url) as db:
         _root(db, scenario)
-        db.load_cgmes_from_binary_buffers([_other_tso_zip('-' + scenario)], scenario, 1, None, other,
+        db.load_cgmes_from_binary_buffers([other_tso_zip('-' + scenario)], scenario, 1, None, other,
                                           parameters=PARAMS)
         assert db.modelling_authorities(scenario) == [AUTHORITY, other]
         assert db.scenarios().loc[scenario, 'modelling_authorities'] == f'{AUTHORITY};{other}'
@@ -320,7 +320,7 @@ def test_two_modelling_authorities(rdf_db_url: str, scenario: str) -> None:
         # the second tree loads too, with the boundary the first one stored, and is the grid its files describe
         second = pp.network.from_rdf_db(db, scenario, 1, None, other, parameters=PARAMS)
         assert second.rdf_db_identity()['modelling_authority'] == other
-        assert_same_network(pp.network.load_from_binary_buffer(_other_tso_zip('-' + scenario), PARAMS), second,
+        assert_same_network(pp.network.load_from_binary_buffer(other_tso_zip('-' + scenario), PARAMS), second,
                             rdf_db_url)
 
         assembly = db.assembly(scenario, BASE)

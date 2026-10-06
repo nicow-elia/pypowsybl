@@ -7,6 +7,7 @@
  */
 package com.powsybl.python.network;
 
+import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.rdfdb.RdfDbConnection;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.iidm.network.Network;
@@ -21,7 +22,9 @@ import static com.powsybl.python.network.RdfDbTestSupport.columns;
 import static com.powsybl.python.network.RdfDbTestSupport.totalLoad;
 import static com.powsybl.python.network.RdfDbUtilTest.importParameters;
 import static com.powsybl.python.network.RdfDbUtilTest.memoryUrl;
+import static com.powsybl.python.network.RdfDbUtilVersionedTest.BASE;
 import static com.powsybl.python.network.RdfDbUtilVersionedTest.BE;
+import static com.powsybl.python.network.RdfDbUtilVersionedTest.NL;
 import static com.powsybl.python.network.RdfDbUtilVersionedTest.OTHER;
 import static com.powsybl.python.network.RdfDbUtilVersionedTest.S;
 import static com.powsybl.python.network.RdfDbUtilVersionedTest.T0815;
@@ -158,6 +161,37 @@ class RdfDbUtilVariantsTest {
             Map<String, RdfDbUtil.VariantRow> rows = byVariant(day);
             assertThat(rows).containsKeys(T0815 + "/bound", T0845 + "/bound", T0930 + "/refused", "InitialState/primary");
             assertThat(rows.get(T0930 + "/refused").reasons()).isNotEmpty();
+        }
+    }
+
+    /**
+     * The default name of a variant: its instant; {@code version@instant} when two requests share an instant;
+     * {@code authority/version@instant} when the requests span several modelling authorities. What triggers the
+     * qualified form is the request list, not the scenario: requests of one tree keep the short names when the
+     * scenario holds two.
+     */
+    @Test
+    void theDefaultNamesOfABulkLoad() {
+        try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
+            aDay(db);
+            ingest(db, S, timestampFiles("t0830-v2", 1.25, T0830, false), 2, T0830);
+            assertThat(RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), S, 1,
+                    null, NL, List.of(), importParameters(), null)).isNotEmpty();
+
+            Network oneTree = RdfDbUtil.loadVariants(db, S, List.of("", ""), List.of(1, 1), List.of(T0815, T0845),
+                    List.of(BE, BE), List.of(), importParameters(), null, false);
+            assertThat(oneTree.getVariantManager().getVariantIds()).containsExactlyInAnyOrder("InitialState",
+                    T0815, T0845);
+
+            Network oneInstant = RdfDbUtil.loadVariants(db, S, List.of("", ""), List.of(1, 2), List.of(T0830, T0830),
+                    List.of(BE, BE), List.of(), importParameters(), null, false);
+            assertThat(oneInstant.getVariantManager().getVariantIds()).containsExactlyInAnyOrder("InitialState",
+                    "1@" + T0830, "2@" + T0830);
+
+            Network twoTrees = RdfDbUtil.loadVariants(db, S, List.of("", ""), List.of(1, 1), List.of(BASE, BASE),
+                    List.of(NL, BE), List.of(), importParameters(), null, false);
+            assertThat(byVariant(twoTrees)).as("the second tree is out of reach of a difference, so it is refused")
+                    .containsKeys(NL + "/1@" + BASE + "/bound", BE + "/1@" + BASE + "/refused");
         }
     }
 

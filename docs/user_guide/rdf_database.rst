@@ -374,8 +374,12 @@ network with one **variant per timestamp**.
 :func:`from_rdf_db` with ``timestamps=[...]`` converts the first requested snapshot, clones it once per further
 snapshot and applies the stored differences on the clones. That is one chain query, one statement fetch and one
 conversion whatever the number of timestamps. The variants are named after the ISO instant of their timestamp
-(``'2021-02-09T20:00:00Z'``), or ``version@instant`` when two requests share an instant; ``variants={...}`` names
-them yourself and lets each one sit at an address of its own, ``(version, timestamp, modelling_authority)``.
+(``'2021-02-09T20:00:00Z'``); ``variants={...}`` names them yourself and lets each one sit at an address of its
+own, ``(version, timestamp, modelling_authority)``. The ISO instant is the short form of the core library's default
+name: ``version@instant`` when two requests share an instant, and ``authority/version@instant`` - for instance
+``'http://elia.be/CGMES/1@2021-02-09T20:00:00Z'`` - when the requests span several modelling authorities. The
+requests decide, not the scenario: ``timestamps=[...]`` takes one version and one authority, so its names stay
+the instants even in a scenario that holds the trees of several authorities.
 
 .. testcode::
 
