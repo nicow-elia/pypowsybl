@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:eu="http://iec.ch/TC57/CIM100-European#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#" xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#" xmlns:dm="http://iec.ch/TC57/61970-552/DifferenceModel/1#">
+    <dm:DifferenceModel rdf:about="urn:uuid:d8ba63a9-4453-45dc-9273-a8a01ff49269_N_STEADY_STATE_HYPOTHESIS_2021-02-09T19:30:00Z_7_1D_DifferenceModel__FM">
+        <md:Model.scenarioTime>2021-02-09T19:30:00Z</md:Model.scenarioTime>
+        <md:Model.created>2026-10-06T16:20:13Z</md:Model.created>
+        <md:Model.description>CGMES Conformity Assessment Test Configuration. The Test Configuration is owned by ENTSO-E and is provided by ENTSO-E “as it is”. To the fullest extent permitted by law, ENTSO-E shall not be liable for any damages of any kind arising out of the use of the model (including any of its subsequent modifications). ENTSO-E neither warrants, nor represents that the use of the model will not infringe the rights of third parties. Any use of the model shall include a reference to ENTSO-E. ENTSO-E web site is the only official source of information related to the model.</md:Model.description>
+        <md:Model.version>7</md:Model.version>
+        <md:Model.DependentOn rdf:resource="urn:uuid:d8ba63a9-4453-45dc-9273-a8a01ff49269"/>
+        <md:Model.Supersedes rdf:resource="urn:uuid:dafc8ab7-c6cf-4d53-8d04-9d33d6892112"/>
+        <md:Model.profile>http://iec.ch/TC57/ns/CIM/SteadyStateHypothesis-EU/3.0</md:Model.profile>
+        <md:Model.modelingAuthoritySet>http://elia.be/CGMES</md:Model.modelingAuthoritySet>
+        <dm:reverseDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_1c6beed6-1acf-42e7-ba55-0cc9f04bddd8">
+                <cim:EnergyConsumer.p>200</cim:EnergyConsumer.p>
+                <cim:EnergyConsumer.q>50</cim:EnergyConsumer.q>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_0a84038e-1952-4d9d-9909-3b49c364a1ac">
+                <cim:Switch.open>false</cim:Switch.open>
+            </rdf:Description>
+        </dm:reverseDifferences>
+        <dm:forwardDifferences rdf:parseType="Statements">
+            <rdf:Description rdf:about="#_1c6beed6-1acf-42e7-ba55-0cc9f04bddd8">
+                <cim:EnergyConsumer.p>420</cim:EnergyConsumer.p>
+                <cim:EnergyConsumer.q>50</cim:EnergyConsumer.q>
+            </rdf:Description>
+            <rdf:Description rdf:about="#_0a84038e-1952-4d9d-9909-3b49c364a1ac">
+                <cim:Switch.open>true</cim:Switch.open>
+            </rdf:Description>
+        </dm:forwardDifferences>
+    </dm:DifferenceModel>
+</rdf:RDF>

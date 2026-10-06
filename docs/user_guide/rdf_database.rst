@@ -131,7 +131,7 @@ Updating a network that is already loaded
 
 :meth:`Network.update_from_rdf_db` is the database equivalent of :meth:`Network.update_from_file`: it applies the
 steady state kept in a scenario to a network that is already in memory, instead of rebuilding it. By default it
-reads the steady-state pair (``SSH`` and ``SV``); ``subsets`` narrows that down.
+reads the steady-state pair (``SSH`` and ``SV``); ``profiles`` narrows that down.
 
 .. testcode::
 
@@ -145,7 +145,7 @@ reads the steady-state pair (``SSH`` and ``SV``); ``subsets`` narrows that down.
     receiver = pp.network.load(DATA_DIR / 'CGMES_Full.zip')
     with pp.network.connect('memory:guide5') as db:
         db.load_cgmes_from_binary_buffers([ssh], '2021-02-09')
-        print(receiver.update_from_rdf_db(db, '2021-02-09', subsets=['SSH']))
+        print(receiver.update_from_rdf_db(db, '2021-02-09', profiles=['SSH']))
         print(receiver.get_loads().loc[load_id]['p0'])
 
 .. testoutput::
@@ -153,9 +153,9 @@ reads the steady-state pair (``SSH`` and ``SV``); ``subsets`` narrows that down.
     update
     42.0
 
-The return value says how the network was brought up to date. This form - the one that names ``subsets`` - is the
-un-versioned flow and always answers ``'update'``. Inside a versioned scenario there are three routes; see
-`Versions and timesteps`_ below.
+The return value says how the network was brought up to date. On an un-versioned scenario, with nothing
+addressed, this is the profile replacement and it always answers ``'update'``. Inside a versioned scenario there
+are three routes; see `Versions and timestamps`_ below.
 
 Query modes and performance
 ---------------------------
@@ -176,83 +176,133 @@ The knobs worth knowing:
   a second snapshot of the same day only transfers the differences between them.
 
 
-.. _Versions and timesteps:
+.. _Versions and timestamps:
 
-Versions and timesteps
-----------------------
+Versions and timestamps
+-----------------------
 
-A scenario is one base grid model - one day. Inside it, a **snapshot** is a consistent grid state addressed by a
-**timestep** (a moment of that day) and a **version** (one study state of that moment). The triple
-``(scenario, timestep, version)`` is the address of every versioned call.
+A scenario is one base grid model - one day. Inside it, a **snapshot** is a consistent grid state with a four-part
+address, written in this order everywhere:
 
-A scenario becomes versioned when its instance files are uploaded with a version: that upload is its **root**
-snapshot, and the ``md:Model.scenarioTime`` of the steady state file becomes its **base timestep**. Everything
-after that is a difference, and it can be written in two ways:
+.. list-table::
+   :header-rows: 1
+   :widths: 20 30 50
+
+   * - argument
+     - type
+     - ``None`` means
+   * - ``scenario``
+     - ``str``, required
+     - not allowed: the scenario is never guessed
+   * - ``version``
+     - ``int``, at least 1
+     - the newest version (a read), the next one (a write)
+   * - ``timestamp``
+     - timezone-aware :class:`datetime.datetime`
+     - the base timestamp of the tree
+   * - ``modelling_authority``
+     - ``str``, the files' ``md:Model.modelingAuthoritySet``
+     - the only authority of the scenario (refused, with the list, when it holds several); a write takes it from
+       the files
+
+A **timestamp** is an instant. Pass an aware datetime - ``datetime(2021, 2, 9, 20, 30, tzinfo=timezone.utc)``, or
+the same moment in any other zone; a naive datetime names no instant and raises :class:`TypeError`. The dataframes
+answer in UTC (``datetime64[ns, UTC]``); showing a moment in a local zone is the caller's choice.
+
+A **version** is an ``int``. Versions of one timestamp only grow: a write without a version gets the head's plus one
+(1 on a new timestamp), and an explicit one must be greater than the head's - gaps are allowed, so an operator may
+number ``10, 20, 30``. The ``md:Model.version`` of the CGMES headers is unrelated to it.
+
+A **modelling authority** is a TSO's tree. Every authority of a scenario has a tree of its own - its root, its
+timestamps, its versions - and all of them share the scenario's boundary. A scenario of a single TSO, which is the
+usual case, never needs to name it: ``None`` resolves to the one there is. :meth:`RdfDatabase.modelling_authorities`
+lists them, and :meth:`RdfDatabase.assembly` answers which snapshot every authority has at one moment - one row
+per authority, an empty one where an authority has no snapshot then - which is what a common grid model is
+assembled from. Loading that assembly as *one* network is not supported: load each row and
+merge.
+
+``profiles`` is **not** part of the address. It is the projection of a call - which CGMES profiles it loads,
+updates, stores or compares (:data:`Profile`: ``'EQ'``, ``'SSH'``, ``'TP'``, ``'SV'``, ...) - and ``None`` is each
+call's default.
+
+A scenario becomes versioned when its instance files are uploaded with an address: that upload is the **root** of
+their authority's tree, and the ``md:Model.scenarioTime`` of the steady state file becomes its **base timestamp**.
+Everything after that is a difference, and it can be written in two ways:
 
 * from a **recorder** - :meth:`NetworkEventRecorder.to_rdf_updates` stores what a network changed, which is how
   one client tells another what it did;
-* from **files** - :meth:`RdfDatabase.load_cgmes` with a version stores a set of CGMES instance files as a
-  difference against the state they derive from, which is how a TSO's day of ninety-six timesteps gets in.
+* from **files** - :meth:`RdfDatabase.load_cgmes` with an address stores a set of CGMES instance files as a
+  difference against the state they derive from, which is how a TSO's day of ninety-six timestamps gets in.
 
-Both end up in the same chain and are read back the same way. A new version of the same timestep grows the chain
-of that moment; an address whose timestep the scenario does not hold yet starts a new timestep, hanging off the
-base chain.
+Both end up in the same chain and are read back the same way. A new version of the same timestamp grows the chain
+of that moment; an address whose timestamp the tree does not hold yet starts a new timestamp, hanging off the base
+chain.
 
-How an address is written:
+How an address is written (``t`` an aware datetime):
 
-=================================  =====================================================================
-``from_rdf_db(db, s)``             the newest version of the scenario's base timestep
-``from_rdf_db(db, s, '1.1')``      version ``1.1`` of the base timestep
-``from_rdf_db(db, s, None, t)``    the newest version of the timestep ``t``
-``from_rdf_db(db, s, '1.1', t)``   exactly that study state
-=================================  =====================================================================
-
-A timestep is written as an ISO instant (``'2021-02-09T20:30:00Z'``), an offset date-time, a
-:class:`datetime.datetime`, or a **label** - ``'20:30'`` - which is a wall time of *that scenario's own base day*.
-The same label therefore means two different moments in two scenarios describing two days.
+======================================  =====================================================================
+``from_rdf_db(db, s)``                  the newest version of the scenario's base timestamp
+``from_rdf_db(db, s, 2)``               version 2 of the base timestamp
+``from_rdf_db(db, s, None, t)``         the newest version of the timestamp ``t``
+``from_rdf_db(db, s, 2, t)``            exactly that study state
+``from_rdf_db(db, s, 2, t, mas)``       the same, in the tree of the modelling authority ``mas``
+======================================  =====================================================================
 
 Storing changes from a recorder
 -------------------------------
 
+Every snapshot belongs to one modelling authority, so the instance files of a snapshot have to state one:
+``data/CGMES_Full.zip`` does not (its EQ and TP say ``powsybl.org``, its SSH Elia, its SV TenneT) and is refused
+with the list. ``data/CGMES_Full_one_authority.zip`` is the same archive with ``http://elia.be/CGMES`` in every
+header, and it is what the examples below store.
+
 .. testcode::
 
+    from datetime import datetime, timezone
+
     with pp.network.connect('memory:demo') as db:
-        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', '1.0')
-        network = pp.network.from_rdf_db(db, '2021-02-09', '1.0')
+        db.load_cgmes(DATA_DIR / 'CGMES_Full_one_authority.zip', '2021-02-09', 1)
+        network = pp.network.from_rdf_db(db, '2021-02-09', 1)
         load_id = sorted(network.get_loads().index)[0]
 
         with network.event_recorder() as recorder:
             network.update_loads(id=load_id, p0=42.0)
-            stored = recorder.to_rdf_updates(db, '2021-02-09', '1.1', '20:30')
+            stored = recorder.to_rdf_updates(db, '2021-02-09', 1, datetime(2021, 2, 9, 20, 30, tzinfo=timezone.utc))
 
         snapshots = db.snapshots('2021-02-09')
         print(len(stored) > 0)
         print(sorted(snapshots['version']))
-        print(sorted(snapshots['timestep_label']))
+        print(sorted(str(t) for t in snapshots['timestamp']))
         print(sorted(snapshots['kind']))
+        print(db.modelling_authorities('2021-02-09'))
 
 .. testoutput::
 
     True
-    ['1.0', '1.1']
-    ['19:30', '20:30']
+    [1, 1]
+    ['2021-02-09 19:30:00+00:00', '2021-02-09 20:30:00+00:00']
     ['diff', 'full']
+    ['http://elia.be/CGMES']
 
 Ingesting a day from files
 --------------------------
 
-A schedule is not recorded on a network: it arrives as one set of instance files per timestep. Each set goes in
+A schedule is not recorded on a network: it arrives as one set of instance files per timestamp. Each set goes in
 with one call, naming the moment it describes::
 
-    with pp.network.connect('http://localhost:3030/ds') as db:
-        db.load_cgmes('day/base.zip', '2021-02-09', '1.0')            # the root
-        for label in ['20:00', '20:15', '20:30']:
-            db.load_cgmes(f'day/{label.replace(":", "")}.zip', '2021-02-09', '1.1', label)
+    from datetime import datetime, timedelta, timezone
 
-The state each set derives from is materialised, the files are compared against it profile by profile, and the
-difference is stored - so what the database holds is the base plus what each timestep changed, not ninety-six
-copies of the grid. The boundary has to be the one the scenario was rooted with; a changed boundary is refused
-rather than silently mixed in.
+    base = datetime(2021, 2, 9, 20, 0, tzinfo=timezone.utc)
+    with pp.network.connect('http://localhost:3030/ds') as db:
+        db.load_cgmes('day/base.zip', '2021-02-09', 1)                       # the root
+        for i in range(3):
+            moment = base + timedelta(minutes=15 * i)
+            db.load_cgmes(f'day/{moment:%H%M}.zip', '2021-02-09', None, moment)
+
+The state each set derives from is materialised, the files are compared against it profile by profile - the
+equipment model and the steady state hypothesis unless ``profiles`` names others - and the difference is stored, so
+what the database holds is the base plus what each timestamp changed, not ninety-six copies of the grid. The
+boundary has to be the one the scenario was rooted with; a changed boundary is refused rather than silently mixed in.
 
 Loading and updating
 --------------------
@@ -264,22 +314,23 @@ already in memory to one. One query decides how, and the return value names the 
 * ``'diff'`` - the stored differences on the way to the target are fetched in one request and applied in place,
   forwards, backwards, or up one branch of the chain and down another;
 * ``'full'`` - the target cannot be reached that way and the network is rebuilt from the database. A target in
-  **another scenario** is always a full reload, decided without a query, because differences never cross scenarios.
+  **another scenario** or of **another modelling authority** is always a full reload, decided without a query,
+  because differences never cross them.
 
 .. testcode::
 
     with pp.network.connect('memory:demo2') as db:
-        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', '1.0')
+        db.load_cgmes(DATA_DIR / 'CGMES_Full_one_authority.zip', '2021-02-09', 1)
 
-        sender = pp.network.from_rdf_db(db, '2021-02-09', '1.0')
+        sender = pp.network.from_rdf_db(db, '2021-02-09', 1)
         with sender.event_recorder() as recorder:
             sender.update_loads(id=sorted(sender.get_loads().index)[0], p0=42.0)
-            recorder.to_rdf_updates(db, '2021-02-09', '1.1')
+            recorder.to_rdf_updates(db, '2021-02-09')   # version 2: the head's plus one
 
-        receiver = pp.network.from_rdf_db(db, '2021-02-09', '1.0')
-        print(receiver.update_from_rdf_db(db, '2021-02-09', '1.1'))
-        print(receiver.update_from_rdf_db(db, '2021-02-09', '1.1'))
-        print(receiver.update_from_rdf_db(db, '2021-02-09', '1.0'))
+        receiver = pp.network.from_rdf_db(db, '2021-02-09', 1)
+        print(receiver.update_from_rdf_db(db, '2021-02-09', 2))
+        print(receiver.update_from_rdf_db(db, '2021-02-09', 2))
+        print(receiver.update_from_rdf_db(db, '2021-02-09', 1))
         print(receiver.rdf_db_identity()['scenario'])
 
 .. testoutput::
@@ -289,7 +340,7 @@ already in memory to one. One query decides how, and the return value names the 
     diff
     2021-02-09
 
-A target in another scenario is the ``'full'`` case: ``receiver.update_from_rdf_db(db, '2021-02-10', '1.0')``
+A target in another scenario is the ``'full'`` case: ``receiver.update_from_rdf_db(db, '2021-02-10', 1)``
 reloads the network from that day, and ``receiver.rdf_db_identity()['scenario']`` then says ``'2021-02-10'``.
 
 What happens on a full reload
@@ -307,51 +358,55 @@ The Python object stays valid and keeps its ``id``, its per-unit setting and its
   :meth:`NetworkEventRecorder.stop` still works, so nothing leaks;
 * dataframes taken before the reload are plain data and are unaffected.
 
-Timesteps and versions as network variants
-------------------------------------------
+Timestamps and versions as network variants
+--------------------------------------------
 
-A day walked by one network keeps no history: after the last timestep the first one is gone. A day loaded as one
-network per timestep keeps all of them, but converts the same equipment once per timestep. The third way is one
-network with one **variant per timestep**.
+A day walked by one network keeps no history: after the last timestamp the first one is gone. A day loaded as one
+network per timestamp keeps all of them, but converts the same equipment once per timestamp. The third way is one
+network with one **variant per timestamp**.
 
-:func:`from_rdf_db` with ``timesteps=[...]`` converts the first requested snapshot, clones it once per further
+:func:`from_rdf_db` with ``timestamps=[...]`` converts the first requested snapshot, clones it once per further
 snapshot and applies the stored differences on the clones. That is one chain query, one statement fetch and one
-conversion whatever the number of timesteps. The variants are named after the timestep labels, or
-``version@label`` when two requests share a label; ``variants={...}`` names them yourself and lets each one sit at
-its own version.
+conversion whatever the number of timestamps. The variants are named after the ISO instant of their timestamp
+(``'2021-02-09T20:00:00Z'``), or ``version@instant`` when two requests share an instant; ``variants={...}`` names
+them yourself and lets each one sit at an address of its own, ``(version, timestamp, modelling_authority)``.
 
 .. testcode::
 
+    from datetime import timedelta
+
+    t2000 = datetime(2021, 2, 9, 20, 0, tzinfo=timezone.utc)
+    t2015 = t2000 + timedelta(minutes=15)
     with pp.network.connect('memory:variants') as db:
-        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', '1.0')
-        sender = pp.network.from_rdf_db(db, '2021-02-09', '1.0')
+        db.load_cgmes(DATA_DIR / 'CGMES_Full_one_authority.zip', '2021-02-09', 1)
+        sender = pp.network.from_rdf_db(db, '2021-02-09', 1)
         load_id = sorted(sender.get_loads().index)[0]
-        for label, value in [('20:00', 42.0), ('20:15', 84.0)]:
-            sender.update_from_rdf_db(db, '2021-02-09', '1.0')
+        for moment, value in [(t2000, 42.0), (t2015, 84.0)]:
+            sender.update_from_rdf_db(db, '2021-02-09', 1)
             with sender.event_recorder() as recorder:
                 sender.update_loads(id=load_id, p0=value)
-                recorder.to_rdf_updates(db, '2021-02-09', '1.1', label)
+                recorder.to_rdf_updates(db, '2021-02-09', 1, moment)
 
-        day = pp.network.from_rdf_db(db, '2021-02-09', '1.1', timesteps=['20:00', '20:15'])
+        day = pp.network.from_rdf_db(db, '2021-02-09', 1, timestamps=[t2000, t2015])
         print(sorted(day.get_variant_ids()))
         print(list(day.variants_binding()['status']))
-        for variant in ['20:00', '20:15']:
+        for variant in ['2021-02-09T20:00:00Z', '2021-02-09T20:15:00Z']:
             day.set_working_variant(variant)
             print(variant, round(float(day.get_loads().loc[load_id, 'p0']), 1))
         day.set_working_variant('InitialState')
 
 .. testoutput::
 
-    ['20:00', '20:15', 'InitialState']
+    ['2021-02-09T20:00:00Z', '2021-02-09T20:15:00Z', 'InitialState']
     ['primary', 'bound', 'bound']
-    20:00 42.0
-    20:15 84.0
+    2021-02-09T20:00:00Z 42.0
+    2021-02-09T20:15:00Z 84.0
 
 Each variant is **exactly** the network a separate :func:`from_rdf_db` of that snapshot gives, and the variants are
 isolated from each other: moving one leaves the others untouched.
 
-:meth:`Network.variants_binding` says what each variant stands for - the scenario, the snapshot IRI, the version,
-the timestep, the stored model per profile and the case date. Its ``status`` column has four values: ``primary``
+:meth:`Network.variants_binding` says what each variant stands for - the scenario, the snapshot IRI, the modelling
+authority, the timestamp, the version, the stored model per profile and the case date. Its ``status`` column has four values: ``primary``
 for the network's own identity (a bulk load leaves it at the first requested snapshot), ``bound`` for a variant
 that stands for a snapshot, ``unbound`` for one that stands for none, and ``refused`` for a snapshot that could
 not be reached, which is not a variant of the network at all but is where its reasons survive.
@@ -364,16 +419,16 @@ snapshot, leaving every other variant - and the working variant of the caller - 
 exist is created by cloning the one nearest to the target in difference terms; a variant that exists is moved from
 wherever it stands. The answers are the familiar ``'noop'`` and ``'diff'``::
 
-    day.update_from_rdf_db(db, '2021-02-09', '1.1', '20:30', variant='20:30')   # created
-    day.update_from_rdf_db(db, '2021-02-09', '1.2', '20:30', variant='20:30')   # moved
+    day.update_from_rdf_db(db, '2021-02-09', 1, t2030, variant='study')   # created
+    day.update_from_rdf_db(db, '2021-02-09', 2, t2030, variant='study')   # moved
 
 The route describes the **difference**, not whether anything happened: with ``variant=``, a ``'noop'`` still
 creates the variant when it did not exist, by cloning one that already stands for the target. Ask
 :meth:`Network.variants_binding` or :meth:`Network.get_variant_ids`, not the route, to learn what is there::
 
-    day.update_from_rdf_db(db, '2021-02-09', '1.1', '20:30', variant='copy')    # 'noop', and 'copy' now exists
+    day.update_from_rdf_db(db, '2021-02-09', 1, t2030, variant='copy')    # 'noop', and 'copy' now exists
 
-Variant mode is an explicit opt-in with exactly three doors: :func:`from_rdf_db` with ``timesteps=``/
+Variant mode is an explicit opt-in with exactly three doors: :func:`from_rdf_db` with ``timestamps=``/
 ``variants=``, :meth:`Network.update_from_rdf_db` with ``variant=``, and
 :meth:`NetworkEventRecorder.to_rdf_updates` with ``variant=`` or ``per_variant=True``. From then on it is
 **sticky** - it stays on after a refusal and after every variant has been removed again, because a caller who
@@ -402,10 +457,10 @@ bindings are exactly as they were.
 .. code-block:: python
 
     try:
-        day.update_from_rdf_db(db, '2021-02-09', '1.1', '21:00', variant='21:00')
+        day.update_from_rdf_db(db, '2021-02-09', 1, t2100, variant='21:00')
     except pp.network.RdfDbVariantRefusedError as refusal:
         print(refusal.variant, refusal.reasons)
-        drifted = pp.network.from_rdf_db(db, '2021-02-09', '1.1', '21:00')   # a network of its own
+        drifted = pp.network.from_rdf_db(db, '2021-02-09', 1, t2100)   # a network of its own
 
 What is per variant and what is not:
 
@@ -436,11 +491,11 @@ line, an object added or removed, topology or state variables - is refused as we
 
    **HVDC.** With the default simplified DC model, writing a voltage source converter's active power setpoint also
    recomputes ``HvdcLine.maxP`` and the converter's loss factor, neither of which IIDM stores per variant. A
-   timestep that moves an HVDC setpoint is therefore refused in variant mode even when the recomputed values
+   timestamp that moves an HVDC setpoint is therefore refused in variant mode even when the recomputed values
    happen to come out unchanged; the verdict is taken per family, not per value. Importing with
    ``iidm.import.cgmes.use-detailed-dc-model`` set to ``'true'`` puts the converter controls into per-variant
    fields and lifts the restriction for voltage source converters; line commutated converters stay unsafe either
-   way. The plain way out is to load that timestep as a network of its own.
+   way. The plain way out is to load that timestamp as a network of its own.
 
 Exporting a variant
 ^^^^^^^^^^^^^^^^^^^
@@ -451,14 +506,14 @@ one variant's changes as the successor of *that variant's* snapshot - and ``per_
 variant the changes were recorded on and answers with a dataframe::
 
     with day.event_recorder() as recorder:
-        for label in ['20:00', '20:15']:
-            day.set_working_variant(label)
+        for variant in ['2021-02-09T20:00:00Z', '2021-02-09T20:15:00Z']:
+            day.set_working_variant(variant)
             day.update_loads(id=load_id, p0=100.0)
         day.set_working_variant('InitialState')
-    written = recorder.to_rdf_updates(db, '2021-02-09', '2.0', per_variant=True)
+    written = recorder.to_rdf_updates(db, '2021-02-09', 2, per_variant=True)
 
-The timestep of such a write is the variant's own and must not be given; ``version`` still names the label the new
-snapshots get. Everything that can refuse happens before anything is written, so an unsupported change under
+The timestamp and the modelling authority of such a write are the variant's own and must not be given; ``version``
+still names the version the new snapshots get (``None``: each chain's head plus one). Everything that can refuse happens before anything is written, so an unsupported change under
 ``unsupported='raise'`` leaves the database untouched. Both forms **opt the network into variant mode**.
 
 On a network that is already in variant mode, a plain ``to_rdf_updates`` without ``variant=`` is a variant
@@ -491,7 +546,7 @@ figure; it grows with the number of per-variant values, not with the file size.
 *With* ``allow_variant_multi_thread_access=True`` - which :func:`from_rdf_db` sets once every variant exists, the
 only safe moment, because creating a variant grows the per-variant arrays of the whole network - IIDM keeps one
 working variant per thread. But pypowsybl attaches a **fresh Java thread to every call** made outside the main
-thread, so a Python worker cannot *hold* a working variant: ``set_working_variant('20:00')`` in a worker succeeds
+thread, so a Python worker cannot *hold* a working variant: ``set_working_variant(name)`` in a worker succeeds
 and the next call in that worker fails with *"Variant index not set for current thread"*. Parallel studies
 therefore go through the APIs that take the variant as an argument, for instance
 :func:`pypowsybl.loadflow.run_ac_async` (``run_ac_async(network, variant_id)``), which runs several variants of
@@ -507,18 +562,20 @@ explicitly.
 The catalogue
 -------------
 
-Five views, all dataframes: :meth:`RdfDatabase.scenarios` (the days in the database),
-:meth:`RdfDatabase.snapshots`, :meth:`RdfDatabase.versions` (one timestep's chain),
-:meth:`RdfDatabase.timesteps` and :meth:`RdfDatabase.models` (the stored CGMES models, with the chain each
-difference belongs to). A scenario the database does not hold gives an empty frame with the documented columns
-rather than an error.
+Six views, all dataframes: :meth:`RdfDatabase.scenarios` (the days in the database, with the modelling authorities
+each holds), :meth:`RdfDatabase.snapshots`, :meth:`RdfDatabase.versions` (one timestamp's chain),
+:meth:`RdfDatabase.timestamps` (one authority's tree), :meth:`RdfDatabase.assembly` (every authority at one
+moment) and :meth:`RdfDatabase.models` (the stored CGMES models, with the chain each difference belongs to);
+:meth:`RdfDatabase.modelling_authorities` lists the trees of a scenario. ``timestamp`` columns are
+``datetime64[ns, UTC]`` and ``version`` columns ``int64``. A scenario the database does not hold gives an empty
+frame with the documented columns rather than an error.
 
 Checkpoints
 -----------
 
 :meth:`RdfDatabase.checkpoint` materialises a snapshot as a full state, so that loading it needs no walk down the
 difference chain. It changes nothing about what the snapshot *is* - the same network comes back before and after -
-and only trades storage for load time. It is worth it at the end of a long day of timesteps.
+and only trades storage for load time. It is worth it at the end of a long day of timestamps.
 
 Performance
 -----------
@@ -542,7 +599,7 @@ produces them is ``tests/test_rdf_db_benchmark.py``.
  update over 10 differences                             7.8 ms       53 ms
  full route inside one scenario (equipment drift)        40 ms       96 ms
  full route across scenarios                             34 ms       61 ms
- a day of 24 timesteps as **variants**                  111 ms      161 ms
+ a day of 24 timestamps as **variants**                 111 ms      161 ms
  the same day as 24 separate networks *(single run)*    832 ms     1192 ms
  the same day walked by one network *(single run)*      115 ms      412 ms
  one variant moved to another snapshot                  5.1 ms       17 ms
@@ -550,11 +607,13 @@ produces them is ``tests/test_rdf_db_benchmark.py``.
 
 .. note::
 
-   **What day these numbers describe.** Each of the 24 timesteps is a *one-value* steady-state difference on a
-   six-load model, so the per-timestep apply is as small as it gets and the bulk load looks as good as it can.
+   **What day these numbers describe.** Each of the 24 timestamps is a *one-value* steady-state difference on a
+   six-load model, so the per-timestamp apply is as small as it gets and the bulk load looks as good as it can.
    The core benchmark measures the same feature on a thin and on a **rich** day (six loads, two generators and a
-   tap changer per timestep) over 96 timesteps and reports about 25 % more for the rich one; see the core
-   documentation, *"Timesteps and versions as network variants"*. The ratio against 24 separate loads, which is
+   tap changer per timestamp) over 96 timestamps and reports about 25 % more for the rich one; see the core
+   documentation on network variants. The numbers were measured before the addressing became
+   ``(scenario, version, timestamp, modelling_authority)``; the key is matched once per operation, so the change does
+   not move them. The ratio against 24 separate loads, which is
    what the feature is about, is dominated by the one conversion either way.
 
 The two export rows measure different things on purpose. The ``to_rdf_updates`` rows time the **export alone** -
@@ -563,10 +622,10 @@ one-row :meth:`Network.update_loads` calls and then the export, and it is domina
 
 Four things are worth taking away. A warm load of a snapshot is faster than importing the same model from files,
 and moving a network from one state to another costs 8-53 ms rather than a full import - which is the number that
-matters for a day of timesteps. Storing a difference is one round trip whether it carries one change or five
+matters for a day of timestamps. Storing a difference is one round trip whether it carries one change or five
 hundred. Walking ten differences costs the same as walking one: the planner answers with one query whatever the
 chain length, and every difference on the path is fetched in one request. And a day loaded **as variants** is
-7-8 times faster than the same day loaded as one network per timestep, because the equipment is converted once;
+7-8 times faster than the same day loaded as one network per timestamp, because the equipment is converted once;
 against a single network walked through the day - which keeps no history - it comes out level in process and is
 2.6 times faster over HTTP, where the walk pays one plan query per step.
 
@@ -583,7 +642,7 @@ through all of this with a real grid model:
 
 * ``01_split_loading_file_to_db_to_iidm.ipynb`` - files into the database once, networks out of it many times;
 * ``02_diff_round_trip_with_versions.ipynb`` - a sender, a receiver, the three routes, and a second day;
-* ``03_timesteps_day_run.ipynb`` - a day of timesteps with a load flow at each step, checkpoints, and midnight.
+* ``03_timesteps_day_run.ipynb`` - a day of timestamps with a load flow at each step, checkpoints, and midnight.
 
 They run against ``memory:`` out of the box. To run them::
 
@@ -604,28 +663,30 @@ For a real database, start one and point the notebooks at it::
 Limitations
 -----------
 
-* A combined grid model loaded from a database comes back as **one** network. Splitting a CGM into subnetworks
-  happens at file level, above any triple store. Load each individual model into its own scenario if you need them
-  separately.
+* A combined grid model is not loaded as one network. Each modelling authority is a tree of its own in the
+  scenario, sharing the boundary; :meth:`RdfDatabase.assembly` answers which snapshot every authority has at one
+  moment, and each of them is loaded on its own. A network loaded from one tree is the sender of differences for
+  that tree only.
 * Authentication is HTTP basic (``user``/``password``) or a custom header (``headers=``). Nothing else is wired up.
-* Restricting a load to some subsets is honoured against a real server; on the ``memory:`` backend a remote-mode
+* Restricting a load to some profiles is honoured against a real server; on the ``memory:`` backend a remote-mode
   load always sees the whole scenario.
-* Ingesting a timestep from files compares the **equipment model and the steady state hypothesis** only. State
-  variables and topology change wholesale between timesteps, so a difference of them would be as large as the data
-  itself; their files are left alone and the snapshot inherits the ones of the state it derives from. Run a load
-  flow if you need flows consistent with the setpoints you just ingested.
-* The un-versioned upload (``load_cgmes`` without a version) is refused on a scenario that holds snapshots: its
+* Ingesting a timestamp from files compares the **equipment model and the steady state hypothesis** by default.
+  State variables and topology change wholesale between timestamps, so a difference of them would be as large as
+  the data itself; their files are left alone and the snapshot inherits the ones of the state it derives from,
+  unless ``profiles`` names them. Run a load flow if you need flows consistent with the setpoints you just
+  ingested.
+* The un-versioned upload (``load_cgmes`` without an address) is refused on a scenario that holds snapshots: its
   instance files belong to a snapshot and are never overwritten.
-* The version chain of a timestep is **linear**: one successor per snapshot. A writer whose network is not at the
-  head is refused and has to reload the head and record again.
+* The version chain of a timestamp is **linear**: one successor per snapshot, and versions only grow. A writer
+  whose network is not at the head is refused and has to reload the head and record again.
 * One base day per scenario. Several days are several scenarios, and a walk from one to another is a full reload,
   never a difference - so "23:45 of day one to 00:00 of day two" is not a diff.
-* Labels such as ``'20:30'`` are wall times of the scenario's own base day and its offset; daylight saving is not
-  handled.
+* Stores written before the addressing became ``(scenario, version, timestamp, modelling_authority)`` are refused
+  with a message saying so; there is no migration - clear the scenario and ingest it again.
 * ``query_mode='remote'`` cannot read a scenario that holds differences or snapshots.
 * Variants are lost on a full reload, and recorders created before one are refused (see above).
-* ``post_processors`` are only honoured on an un-versioned scenario; the snapshot entry points of the core library
-  take no load options, and neither does the variant bulk load.
+* ``post_processors`` are only honoured when nothing is addressed and no ``profiles`` are given; the snapshot entry
+  points of the core library take no load options, and neither does the variant bulk load.
 * In variant mode, a difference that writes something IIDM does not store per variant - limits, impedances, the
   HVDC values of the simplified DC model, an equipment drift - is refused, never applied and never turned into a
   silent full reload. The table above is the list; the way out is a network of its own.

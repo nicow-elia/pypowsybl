@@ -7,7 +7,7 @@ files, and addressing a whole day of grid states.
 | --- | --- |
 | [`01_split_loading_file_to_db_to_iidm.ipynb`](01_split_loading_file_to_db_to_iidm.ipynb) | CGMES files into the database once, networks out of it many times; the catalogue views; what the two paths cost |
 | [`02_diff_round_trip_with_versions.ipynb`](02_diff_round_trip_with_versions.ipynb) | a sender records a change and writes it as a new version; a receiver walks to it; `noop` / `diff` / `full`; a second day as a second scenario |
-| [`03_timesteps_day_run.ipynb`](03_timesteps_day_run.ipynb) | a day of timesteps, one network walking it with a load flow at each step, checkpoints, and crossing midnight into the next scenario |
+| [`03_timesteps_day_run.ipynb`](03_timesteps_day_run.ipynb) | a day of timestamps, one network walking it with a load flow at each step, checkpoints, and crossing midnight into the next scenario |
 
 They build on each other but each one is self-contained: every notebook connects, writes what it needs and closes.
 
@@ -15,8 +15,10 @@ They build on each other but each one is self-contained: every notebook connects
 
 Every call into the database names a **scenario**: the base grid model the data belongs to, in practice one day.
 It is a required argument and never guessed, because a database is expected to hold many days side by side. Inside
-a scenario a state is addressed by a **timestep** (a moment of that day) and a **version** (one study state of that
-moment). Differences never cross scenarios: walking a network from one day to another reloads it.
+a scenario a state is addressed by a **version** (an `int`, one study state), a **timestamp** (a timezone-aware
+`datetime`, a moment of that day) and a **modelling authority** (the TSO whose files it is; left out here, because
+every scenario of these notebooks holds one). Differences never cross scenarios: walking a network from one day to
+another reloads it.
 
 ## Running them
 
