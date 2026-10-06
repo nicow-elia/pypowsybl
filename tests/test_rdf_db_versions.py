@@ -315,7 +315,8 @@ def test_unknown_scenario_gives_empty_frames(rdf_db_url: str) -> None:
         assert db.models(missing).empty
         assert db.modelling_authorities(missing) == []
         assert not db.versioned(missing)
-        with pytest.raises(PyPowsyblError, match='holds no snapshot'):
+        with pytest.raises(PyPowsyblError, match=re.escape(f"scenario '{missing}' holds no snapshot, so the modelling"
+                                                           " authority cannot be left open")):
             pp.network.from_rdf_db(db, missing, 1)
         # Without a version the un-versioned route answers, and it says the scenario holds nothing
         with pytest.raises(PyPowsyblError, match='the scenario is empty'):
@@ -544,7 +545,9 @@ def test_load_and_update_errors(rdf_db_url: str, scenario: str) -> None:
     with pp.network.connect(rdf_db_url) as db:
         network = _root(db, scenario)
 
-        with pytest.raises(PyPowsyblError, match='holds no snapshot'):
+        # the stable part of the text: who refused, and the address in full; the listing that follows may change
+        address = f'({scenario}, {AUTHORITY}, base, 9)'
+        with pytest.raises(PyPowsyblError, match=re.escape(f"scenario '{scenario}' holds no snapshot {address}")):
             pp.network.from_rdf_db(db, scenario, 9)
         with pytest.raises(PyPowsyblError):
             pp.network.from_rdf_db(db, scenario, 1, None, 'http://nobody/CGMES')
