@@ -17,8 +17,9 @@ set of CGMES instance files (:meth:`RdfDatabase.load_cgmes` with a version, whic
 gets in). They end up in the same chain and are read back the same way.
 
 **The address** is ``(scenario, version, timestamp, modelling_authority)``: an ``int`` version, a timezone-aware
-datetime and the ``modelingAuthoritySet`` of the files - here always the one authority of ``CGMES_Full.zip``, which
-``None`` resolves to.
+datetime and the modelling authority the snapshot is stored under. ``CGMES_Full.zip`` states one per profile, so
+every write here names :data:`AUTHORITY`; reads leave it open (``None``), which resolves to the only authority of
+the scenario.
 """
 import io
 import pickle
@@ -43,7 +44,7 @@ PARAMS = {'iidm.import.cgmes.create-cgmes-export-mapping': 'true'}
 
 def _root(db: pp.network.RdfDatabase, scenario: str) -> pp.network.Network:
     """Store the base grid model as the root of a scenario and return the network of that root."""
-    ids = db.load_cgmes(CGMES_ZIP, scenario, 1, parameters=PARAMS)
+    ids = db.load_cgmes(CGMES_ZIP, scenario, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
     assert len(ids) >= 4, f'the root of {scenario} should hold one model per instance file, got {ids}'
     return pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
 
@@ -78,8 +79,8 @@ _SNAPSHOT_COLUMNS = ['scenario', 'modelling_authority', 'timestamp', 'version', 
                      'edge', 'depth', 'has_full', 'fast', 'members', 'created', 'description']
 
 
-def _other_authority_zip(authority: str, suffix: str) -> io.BytesIO:
-    """``CGMES_Full.zip`` as the files of another TSO of the same day: another authority, the same boundary."""
+def _other_tso_zip(suffix: str) -> io.BytesIO:
+    """``CGMES_Full.zip`` as the files of another TSO of the same day: other model ids, the same boundary."""
     buffer = io.BytesIO()
     with zipfile.ZipFile(CGMES_ZIP) as source, zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as target:
         for entry in source.namelist():
@@ -89,7 +90,6 @@ def _other_authority_zip(authority: str, suffix: str) -> io.BytesIO:
                                  content)
                 content = re.sub(r'(<md:Model\.DependentOn[^>]*rdf:resource=")([^"]*)(")',
                                  r'\g<1>\g<2>' + suffix + r'\g<3>', content)
-                content = content.replace(f'>{AUTHORITY}<', f'>{authority}<')
             target.writestr(entry, content)
     buffer.seek(0)
     return buffer
@@ -202,7 +202,7 @@ def test_naive_datetime_is_refused(rdf_db_url: str, scenario: str) -> None:
             lambda: pp.network.from_rdf_db(db, scenario, 1, naive),
             lambda: pp.network.from_rdf_db(db, scenario, timestamps=[naive]),
             lambda: network.update_from_rdf_db(db, scenario, 1, naive),
-            lambda: db.load_cgmes(CGMES_ZIP, scenario, 2, naive),
+            lambda: db.load_cgmes(CGMES_ZIP, scenario, 2, naive, modelling_authority=AUTHORITY),
             lambda: db.versions(scenario, naive),
             lambda: db.checkpoint(scenario, 1, naive),
             lambda: db.assembly(scenario, naive),
@@ -245,12 +245,37 @@ def test_profiles_literal(rdf_db_url: str, scenario: str) -> None:
         assert network.update_from_rdf_db(db, scenario, 1, profiles=['EQ', 'SSH']) == 'noop'
 
 
+def test_files_of_several_authorities_need_one_named(rdf_db_url: str, scenario: str) -> None:
+    """
+    ``CGMES_Full.zip`` states one modelling authority per profile, and a snapshot is stored under exactly one: the
+    equipment and steady state hypothesis files disagree, so a write that leaves the authority open is refused with
+    the authority of every profile, and nothing is stored. Naming one stores the files under it.
+    """
+    with pp.network.connect(rdf_db_url) as db:
+        with pytest.raises(PyPowsyblError, match='state the modelling authorities') as root:
+            db.load_cgmes(CGMES_ZIP, scenario, 1, parameters=PARAMS)
+        assert not db.versioned(scenario) and db.modelling_authorities(scenario) == []
+
+        _root(db, scenario)
+        with pytest.raises(PyPowsyblError, match='state the modelling authorities') as further:
+            db.load_cgmes_from_binary_buffers([ssh_variant(1, at('20:00'))], scenario, None, at('20:00'),
+                                              parameters=PARAMS)
+        assert db.modelling_authorities(scenario) == [AUTHORITY]
+        assert db.timestamps(scenario).index.tolist() == [BASE], 'the refused timestamp is not stored'
+
+    for refusal in (root, further):
+        message = str(refusal.value)
+        for stated in ('EQ=powsybl.org', f'SSH={AUTHORITY}', 'SV=http://tennet.nl/CGMES',
+                       'do not agree on one: pass the modelling authority in the address'):
+            assert stated in message, f'{stated!r} is missing from: {message}'
+
+
 def test_two_modelling_authorities(rdf_db_url: str, scenario: str) -> None:
     """A second TSO's files in the same scenario: a tree of its own, the same boundary, and no more guessing."""
     other = 'http://tennet.nl/CGMES'
     with pp.network.connect(rdf_db_url) as db:
         _root(db, scenario)
-        db.load_cgmes_from_binary_buffers([_other_authority_zip(other, '-' + scenario)], scenario, 1, None, other,
+        db.load_cgmes_from_binary_buffers([_other_tso_zip('-' + scenario)], scenario, 1, None, other,
                                           parameters=PARAMS)
         assert db.modelling_authorities(scenario) == [AUTHORITY, other]
         assert db.scenarios().loc[scenario, 'modelling_authorities'] == f'{AUTHORITY};{other}'
@@ -310,7 +335,8 @@ def test_routes_noop_diff_full(rdf_db_url: str, scenario: str) -> None:
 
         # A timestamp whose equipment drifted cannot be applied in place, so the loader falls back to a reload -
         # inside the same scenario, and without anybody asking for it
-        db.load_cgmes_from_binary_buffers([eq_drift(2, at('21:00'))], scenario, None, at('21:00'), parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([eq_drift(2, at('21:00'))], scenario, None, at('21:00'),
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
         models = db.models(scenario)
         assert not bool(models[(models['kind'] == 'diff') & (models['subset'] == 'EQ')]['fast'].all()), \
             'an equipment rename is not a fast-route difference'
@@ -324,7 +350,8 @@ def test_routes_noop_diff_full(rdf_db_url: str, scenario: str) -> None:
 def test_multiple_scenarios(rdf_db_url: str, scenario: str, scenario2: str) -> None:
     with pp.network.connect(rdf_db_url) as db:
         monday = _root(db, scenario)
-        db.load_cgmes_from_binary_buffers([next_day_zip()], scenario2, 1, parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([next_day_zip()], scenario2, 1,
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
 
         scenarios = db.scenarios()
         assert {scenario, scenario2}.issubset(set(scenarios.index))
@@ -359,10 +386,12 @@ def test_full_route_swaps_the_handle(rdf_db_url: str, scenario: str, scenario2: 
     with pp.network.connect(rdf_db_url) as db:
         network = _root(db, scenario)
         if drift == 'eq_drift':
-            db.load_cgmes_from_binary_buffers([eq_drift(3, at('21:00'))], scenario, 1, at('21:00'), parameters=PARAMS)
+            db.load_cgmes_from_binary_buffers([eq_drift(3, at('21:00'))], scenario, 1, at('21:00'),
+                                              modelling_authority=AUTHORITY, parameters=PARAMS)
             target = (scenario, 1, at('21:00'))
         else:
-            db.load_cgmes_from_binary_buffers([next_day_zip()], scenario2, 1, parameters=PARAMS)
+            db.load_cgmes_from_binary_buffers([next_day_zip()], scenario2, 1,
+                                              modelling_authority=AUTHORITY, parameters=PARAMS)
             target = (scenario2, 1, None)
 
         network.clone_variant('InitialState', 'v2')
@@ -428,9 +457,10 @@ def test_timestamps_walk(rdf_db_url: str, scenario: str, scenario2: str) -> None
         # Crossing midnight: the next day is another scenario, so the first step into it is a reload and the
         # steps inside it are differences again - on the replacement network, which is the same Python object
         after_midnight = at('00:15', NEXT_DAY)
-        db.load_cgmes_from_binary_buffers([next_day_zip()], scenario2, 1, parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([next_day_zip()], scenario2, 1,
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
         db.load_cgmes_from_binary_buffers([ssh_variant(9, after_midnight)], scenario2, None, after_midnight,
-                                          parameters=PARAMS)
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
         assert walker.update_from_rdf_db(db, scenario2, 1) == 'full'
         assert walker.update_from_rdf_db(db, scenario2, 1, after_midnight) == 'diff'
         assert_same_setpoints(pp.network.from_rdf_db(db, scenario2, 1, after_midnight, parameters=PARAMS), walker)
@@ -444,7 +474,7 @@ def test_timestamps_ingested_from_files(rdf_db_url: str, scenario: str) -> None:
         _root(db, scenario)
         for i, moment in enumerate(moments, start=1):
             members = db.load_cgmes_from_binary_buffers([ssh_variant(i, moment)], scenario, None, moment,
-                                                        parameters=PARAMS)
+                                                        modelling_authority=AUTHORITY, parameters=PARAMS)
             assert members, f'{moment} should have stored at least the SSH difference'
 
         timestamps = db.timestamps(scenario)
@@ -622,7 +652,7 @@ def test_two_connections_share_one_memory_store(scenario: str) -> None:
     """Two ``RdfDatabase`` objects on one ``memory:`` name are two views of the same store."""
     name = f'memory:{uuid4().hex}'
     with pp.network.connect(name) as writer, pp.network.connect(name) as reader:
-        writer.load_cgmes(CGMES_ZIP, scenario, 1, parameters=PARAMS)
+        writer.load_cgmes(CGMES_ZIP, scenario, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
         assert scenario in reader.scenarios().index
         assert len(reader.snapshots(scenario)) == 1
         assert reader.versioned(scenario)

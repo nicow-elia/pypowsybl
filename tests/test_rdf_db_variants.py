@@ -57,10 +57,10 @@ TESTS_DIR = Path(__file__).parent
 
 def _a_day(db: pp.network.RdfDatabase, scenario: str, moments: Optional[List[datetime]] = None) -> None:
     """The base grid model as the root of a scenario, plus one steady-state timestamp per moment."""
-    db.load_cgmes(CGMES_ZIP, scenario, 1, parameters=PARAMS)
+    db.load_cgmes(CGMES_ZIP, scenario, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
     for i, moment in enumerate(moments if moments is not None else MOMENTS, start=1):
         db.load_cgmes_from_binary_buffers([ssh_variant(i, moment, suffix=scenario)], scenario, None, moment,
-                                          parameters=PARAMS)
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
 
 
 def _loads(network: pp.network.Network, variant: str) -> pd.DataFrame:
@@ -127,7 +127,7 @@ def test_variants_mapping_names_them_and_mixes_versions(rdf_db_url: str, scenari
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
         db.load_cgmes_from_binary_buffers([ssh_variant(9, T2015, suffix=scenario)], scenario, 2, T2015,
-                                          parameters=PARAMS)
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
 
         day = pp.network.from_rdf_db(db, scenario, 1,
                                      variants={'early': T2000, 'study': (2, T2015, None)}, parameters=PARAMS)
@@ -176,7 +176,8 @@ def test_an_equipment_drift_is_refused_and_changes_nothing(rdf_db_url: str, scen
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100, parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100,
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
         day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
         before = {name: _loads(day, name) for name in NAMES + ['InitialState']}
 
@@ -216,7 +217,8 @@ def test_an_equipment_drift_is_refused_and_changes_nothing(rdf_db_url: str, scen
 def test_a_bulk_load_refuses_one_timestamp(rdf_db_url: str, scenario: str) -> None:
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100, parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100,
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
 
         with pytest.raises(RdfDbVariantRefusedError) as error:
             pp.network.from_rdf_db(db, scenario, 1, timestamps=[T2000, T2100, T2030], parameters=PARAMS)
@@ -259,7 +261,8 @@ def test_a_user_clone_does_not_switch_the_network_into_variant_mode(rdf_db_url: 
     """Cloning is the ordinary IIDM idiom; only a named variant or a bulk load opts into variant mode."""
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100, parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100,
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
         network = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
         network.clone_variant('InitialState', 'what-if')
 
@@ -445,7 +448,8 @@ def test_a_variant_export_opts_the_network_into_variant_mode(rdf_db_url: str, sc
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100, parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100,
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
         network = pp.network.from_rdf_db(db, scenario, 1, T2000, parameters=PARAMS)
         network.clone_variant('InitialState', 'study')
         load = str(network.get_loads().index[0])
@@ -660,7 +664,7 @@ def test_a_cross_scenario_refusal_switches_variant_mode_on(rdf_db_url: str, scen
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes(CGMES_ZIP, scenario2, 1, parameters=PARAMS)
+        db.load_cgmes(CGMES_ZIP, scenario2, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
         network = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
         network.clone_variant('InitialState', 'keep')
         handle = network._handle  # pylint: disable=protected-access
@@ -693,16 +697,16 @@ sys.path.insert(0, {str(TESTS_DIR)!r})
 logging.basicConfig(stream=open(os.devnull, "w"))
 logging.getLogger("powsybl").setLevel(logging.INFO)
 import pypowsybl as pp
-from rdf_db_fixtures import CGMES_ZIP, at, ssh_variant
+from rdf_db_fixtures import AUTHORITY, CGMES_ZIP, at, ssh_variant
 pp.set_config_read(False)
 PARAMS = {PARAMS!r}
 MOMENTS = [at("20:00"), at("20:15"), at("20:30")]
 with pp.network.connect({rdf_db_url!r}) as db:
     scenario = {scenario!r} + "-thread"
-    db.load_cgmes(CGMES_ZIP, scenario, 1, parameters=PARAMS)
+    db.load_cgmes(CGMES_ZIP, scenario, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
     for i, moment in enumerate(MOMENTS, start=1):
         db.load_cgmes_from_binary_buffers([ssh_variant(i, moment, suffix=scenario)], scenario, None, moment,
-                                          parameters=PARAMS)
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
     day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
     stop = []
     reads = [0]

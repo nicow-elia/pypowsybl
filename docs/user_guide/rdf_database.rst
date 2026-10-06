@@ -203,7 +203,7 @@ address, written in this order everywhere:
    * - ``modelling_authority``
      - ``str``, the files' ``md:Model.modelingAuthoritySet``
      - the only authority of the scenario (refused, with the list, when it holds several); a write takes it from
-       the files
+       the equipment and steady state hypothesis headers of the files when they agree, and is refused otherwise
 
 A **timestamp** is an instant. Pass an aware datetime - ``datetime(2021, 2, 9, 20, 30, tzinfo=timezone.utc)``, or
 the same moment in any other zone; a naive datetime names no instant and raises :class:`TypeError`. The dataframes
@@ -251,17 +251,19 @@ How an address is written (``t`` an aware datetime):
 Storing changes from a recorder
 -------------------------------
 
-Every snapshot belongs to one modelling authority, so the instance files of a snapshot have to state one:
-``data/CGMES_Full.zip`` does not (its EQ and TP say ``powsybl.org``, its SSH Elia, its SV TenneT) and is refused
-with the list. ``data/CGMES_Full_one_authority.zip`` is the same archive with ``http://elia.be/CGMES`` in every
-header, and it is what the examples below store.
+One snapshot is stored under one modelling authority; the files it carries may come from several. A write that
+names the authority takes it whatever the files state. One that leaves it open takes the authority the equipment
+and the steady state hypothesis files agree on, and is refused otherwise, naming the authority of every profile.
+``data/CGMES_Full.zip`` is such a case - its EQ and TP say ``powsybl.org``, its SSH Elia, its SV TenneT - so the
+examples below name Elia on every write. Reads leave it open: the scenario holds one tree.
 
 .. testcode::
 
     from datetime import datetime, timezone
 
+    elia = 'http://elia.be/CGMES'
     with pp.network.connect('memory:demo') as db:
-        db.load_cgmes(DATA_DIR / 'CGMES_Full_one_authority.zip', '2021-02-09', 1)
+        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', 1, modelling_authority=elia)
         network = pp.network.from_rdf_db(db, '2021-02-09', 1)
         load_id = sorted(network.get_loads().index)[0]
 
@@ -320,7 +322,7 @@ already in memory to one. One query decides how, and the return value names the 
 .. testcode::
 
     with pp.network.connect('memory:demo2') as db:
-        db.load_cgmes(DATA_DIR / 'CGMES_Full_one_authority.zip', '2021-02-09', 1)
+        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', 1, modelling_authority=elia)
 
         sender = pp.network.from_rdf_db(db, '2021-02-09', 1)
         with sender.event_recorder() as recorder:
@@ -378,7 +380,7 @@ them yourself and lets each one sit at an address of its own, ``(version, timest
     t2000 = datetime(2021, 2, 9, 20, 0, tzinfo=timezone.utc)
     t2015 = t2000 + timedelta(minutes=15)
     with pp.network.connect('memory:variants') as db:
-        db.load_cgmes(DATA_DIR / 'CGMES_Full_one_authority.zip', '2021-02-09', 1)
+        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', 1, modelling_authority=elia)
         sender = pp.network.from_rdf_db(db, '2021-02-09', 1)
         load_id = sorted(sender.get_loads().index)[0]
         for moment, value in [(t2000, 42.0), (t2015, 84.0)]:

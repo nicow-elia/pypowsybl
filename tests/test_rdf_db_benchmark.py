@@ -112,7 +112,7 @@ import pypowsybl._pypowsybl as _pp
 TEST_DIR = Path(__file__).parent
 sys.path.insert(0, str(TEST_DIR))
 
-from rdf_db_fixtures import CGMES_ZIP, at, eq_drift, next_day_zip  # noqa: E402  pylint: disable=wrong-import-position
+from rdf_db_fixtures import AUTHORITY, CGMES_ZIP, at, eq_drift, next_day_zip  # noqa: E402  pylint: disable=wrong-import-position
 
 PARAMS = {'iidm.import.cgmes.create-cgmes-export-mapping': 'true'}
 WARMUPS = 2
@@ -184,16 +184,17 @@ def measure(url: str, label: str) -> Dict[str, float]:  # pylint: disable=too-ma
 
     # (u) upload: a root can be written once per scenario, so every run needs a scenario of its own
     def upload() -> None:
-        pp.network.connect(url).load_cgmes(CGMES_ZIP, f'{scenario}-u-{uuid4().hex[:8]}', 1, parameters=PARAMS)
+        pp.network.connect(url).load_cgmes(CGMES_ZIP, f'{scenario}-u-{uuid4().hex[:8]}', 1,
+                                           modelling_authority=AUTHORITY, parameters=PARAMS)
 
     numbers['u'] = _median_ms(upload)
-    _report('(u) upload root', 'db.load_cgmes(zip, s, 1)', numbers['u'])
+    _report('(u) upload root', 'db.load_cgmes(zip, s, 1, modelling_authority=a)', numbers['u'])
 
     with pp.network.connect(url) as db:
         # The store the rest of the run reads from, with a second day in it so that nothing is measured on an
         # unrealistically empty database
-        db.load_cgmes(CGMES_ZIP, scenario, 1, parameters=PARAMS)
-        db.load_cgmes_from_binary_buffers([next_day_zip()], other, 1, parameters=PARAMS)
+        db.load_cgmes(CGMES_ZIP, scenario, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([next_day_zip()], other, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
 
         def cold() -> None:
             with pp.network.connect(url, cache=False) as fresh:
@@ -269,7 +270,8 @@ def measure(url: str, label: str) -> Dict[str, float]:  # pylint: disable=too-ma
                 _java_split(_update_info(far, db, scenario, head)))
 
         # (f) the full route inside one scenario: a timestamp whose equipment drifted cannot be applied in place
-        db.load_cgmes_from_binary_buffers([eq_drift(7, at('23:00'))], scenario, None, at('23:00'), parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([eq_drift(7, at('23:00'))], scenario, None, at('23:00'),
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
         drifter = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
         step = [0]
 
@@ -313,7 +315,7 @@ def _build_day(db: pp.network.RdfDatabase, scenario: str, moments: List[datetime
     Ingesting the same day from files would be more realistic and an order of magnitude dearer, and what is
     measured below reads the stored differences either way.
     """
-    db.load_cgmes(CGMES_ZIP, scenario, 1, parameters=PARAMS)
+    db.load_cgmes(CGMES_ZIP, scenario, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
     sender = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
     load_id = sorted(sender.get_loads().index)[0]
     for i, moment in enumerate(moments, start=1):

@@ -21,13 +21,7 @@ from pathlib import Path
 from typing import Dict, Optional
 
 DATA_DIR = Path(__file__).resolve().parents[2] / 'data'
-CGMES_ZIP = DATA_DIR / 'CGMES_Full_one_authority.zip'
-"""
-``data/CGMES_Full.zip`` with every non-boundary file stating one ``md:Model.modelingAuthoritySet``
-(``http://elia.be/CGMES``). The original states three - ``powsybl.org`` on EQ and TP, Elia on SSH, TenneT on SV - and
-a snapshot of the database belongs to exactly one modelling authority, so the original can be stored un-versioned
-but not as a snapshot. Everything else is byte for byte the same.
-"""
+CGMES_ZIP = DATA_DIR / 'CGMES_Full.zip'
 
 SCENARIO = '2021-02-09'
 """The day ``data/CGMES_Full.zip`` describes: its steady state file states 2021-02-09T19:30:00Z."""
@@ -36,7 +30,14 @@ NEXT_DAY = '2021-02-10'
 """The day the copy of :func:`next_day_zip` describes."""
 
 AUTHORITY = 'http://elia.be/CGMES'
-"""The ``md:Model.modelingAuthoritySet`` of ``data/CGMES_Full.zip``: the one tree of every scenario here."""
+"""
+The modelling authority every snapshot of the notebooks is stored under, passed explicitly on every write.
+
+``data/CGMES_Full.zip`` states three - ``powsybl.org`` on EQ and TP, Elia on SSH, TenneT on SV - and one snapshot is
+stored under one modelling authority, whatever the headers of the files it carries state. With the equipment and
+the steady state hypothesis disagreeing, the database cannot pick one by itself and refuses a write that leaves the
+authority open, naming the authority of every profile.
+"""
 
 
 def at(hh_mm: str, day: str = SCENARIO) -> datetime:
