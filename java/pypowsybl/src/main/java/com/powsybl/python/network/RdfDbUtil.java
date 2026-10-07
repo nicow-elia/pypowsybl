@@ -58,6 +58,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Properties;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -830,8 +831,10 @@ public final class RdfDbUtil {
             SnapshotCatalog catalog = db.snapshots(scenario);
             List<SnapshotInfo> snapshots = catalog.snapshots();
             String authorities = snapshots.isEmpty() ? "" : String.join(";", catalog.modellingAuthorities());
+            Optional<SnapshotCatalog.ArchiveCutoff> archive = catalog.archiveCutoff();
             rows.add(new ScenarioRow(scenario, authorities, !snapshots.isEmpty(), snapshots.size(),
-                    catalog.archiveCutoff().map(Instant::toString).orElse(""), catalog.archiveLocation().orElse("")));
+                    archive.map(a -> a.cutoff().toString()).orElse(""),
+                    archive.map(SnapshotCatalog.ArchiveCutoff::location).orElse("")));
         }
         rows.sort(Comparator.comparing(ScenarioRow::scenario));
         return rows;
@@ -858,10 +861,10 @@ public final class RdfDbUtil {
      * @return {@code cutoff} (an ISO-8601 instant) and {@code location}, both empty when none is set
      */
     public static Map<String, String> archiveCutoff(RdfDbConnection db, String scenario) {
-        SnapshotCatalog catalog = db.snapshots(requireScenario(scenario));
+        Optional<SnapshotCatalog.ArchiveCutoff> archive = db.snapshots(requireScenario(scenario)).archiveCutoff();
         Map<String, String> answer = new LinkedHashMap<>();
-        answer.put("cutoff", catalog.archiveCutoff().map(Instant::toString).orElse(""));
-        answer.put("location", catalog.archiveLocation().orElse(""));
+        answer.put("cutoff", archive.map(a -> a.cutoff().toString()).orElse(""));
+        answer.put("location", archive.map(SnapshotCatalog.ArchiveCutoff::location).orElse(""));
         return answer;
     }
 
