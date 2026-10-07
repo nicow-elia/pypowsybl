@@ -207,7 +207,9 @@ def test_catalog_dataframes(rdf_db_url: str, scenario: str) -> None:
 
         scenarios = db.scenarios()
         assert scenarios.index.name == 'scenario'
-        assert list(scenarios.columns) == ['modelling_authorities', 'versioned', 'snapshot_count']
+        assert list(scenarios.columns) == ['modelling_authorities', 'versioned', 'snapshot_count', 'archive_cutoff',
+                                           'archive_location']
+        assert pd.isna(scenarios.loc[scenario, 'archive_cutoff']) and scenarios.loc[scenario, 'archive_location'] == ''
         assert scenarios.loc[scenario, 'modelling_authorities'] == AUTHORITY
         assert bool(scenarios.loc[scenario, 'versioned'])
         assert int(scenarios.loc[scenario, 'snapshot_count']) == 3
@@ -1069,3 +1071,40 @@ def test_changes_between(rdf_db_url: str, scenario: str) -> None:
         assert db.changes_between(scenario, at('20:15'), at('20:15')).empty, 'the same snapshot changes nothing'
         backwards = db.changes_between(scenario, at('20:15'), None)
         assert not backwards.empty and set(backwards['side']) == {'forward', 'reverse'}
+
+
+def test_archive_cutoff(rdf_db_url: str, scenario: str) -> None:
+    """
+    An archive cutoff refuses reads before it, naming where the states went; a network standing at an archived
+    snapshot is reloaded rather than walked from; clearing the cutoff serves the states again.
+    """
+    location = 's3://archive/' + scenario
+    with pp.network.connect(rdf_db_url) as db:
+        at_base = _root(db, scenario)
+        db.load_cgmes_from_binary_buffers([ssh_variant(1, at('20:00'), suffix=scenario)], scenario, None,
+                                          at('20:00'), parameters=PARAMS)
+        db.rollover(scenario, None, at('20:00'))
+        db.load_cgmes_from_binary_buffers([ssh_variant(2, at('20:15'), suffix=scenario)], scenario, None,
+                                          at('20:15'), parameters=PARAMS)
+        assert db.archive_cutoff(scenario) is None
+
+        db.set_archive_cutoff(scenario, at('20:00'), location)
+        assert db.archive_cutoff(scenario) == (at('20:00'), location)
+        assert db.scenarios().loc[scenario, 'archive_cutoff'] == at('20:00')
+        assert db.scenarios().loc[scenario, 'archive_location'] == location
+        with pytest.raises(PyPowsyblError, match=re.escape(f'is in the archive at {location}')):
+            pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
+        later = pp.network.from_rdf_db(db, scenario, None, at('20:15'), parameters=PARAMS)
+        assert not later.get_loads().empty
+        assert at_base.update_from_rdf_db(db, scenario, None, at('20:15')) == 'full', \
+            'an archived snapshot is not walked from'
+        with pytest.raises(PyPowsyblError, match='archive'):
+            later.update_from_rdf_db(db, scenario, '1')
+        assert len(db.snapshots(scenario)) == 3, 'listings still show archived snapshots'
+        with pytest.raises(ValueError, match='archive location is required'):
+            db.set_archive_cutoff(scenario, at('20:00'), ' ')
+
+        db.clear_archive_cutoff(scenario)
+        assert db.archive_cutoff(scenario) is None
+        assert not pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS).get_loads().empty
+

@@ -1326,6 +1326,11 @@ PYBIND11_MODULE(_pypowsybl, m) {
     m.def("get_rdf_db_changes_between", &pypowsybl::getRdfDbChangesBetween, "Create a series array of the changes between two snapshots",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("modelling_authority"),
           py::arg("from_version"), py::arg("from_timestamp"), py::arg("to_version"), py::arg("to_timestamp"));
+    m.def("set_rdf_db_archive_cutoff", &pypowsybl::setRdfDbArchiveCutoff, "Set or clear the archive cutoff of a scenario",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("cutoff"),
+          py::arg("location"));
+    m.def("get_rdf_db_archive_cutoff", &pypowsybl::getRdfDbArchiveCutoff, "The archive cutoff of a scenario",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"));
     m.def("create_glsk_document", &pypowsybl::createGLSKdocument, "Create a glsk importer.", py::arg("filename"));
 
     m.def("get_glsk_injection_keys", &pypowsybl::getGLSKinjectionkeys, "Get glsk injection keys available for a country", py::arg("network"), py::arg("importer"), py::arg("country"), py::arg("instant"));

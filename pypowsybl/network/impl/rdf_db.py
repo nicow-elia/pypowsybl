@@ -470,9 +470,13 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
         Returns:
             a dataframe indexed by ``scenario`` (str, as given at upload) with the columns
             ``modelling_authorities`` (the authorities holding a tree in the scenario, ``;``-joined, empty when the
-            scenario is un-versioned), ``versioned`` (bool) and ``snapshot_count`` (int). Sorted by name.
+            scenario is un-versioned), ``versioned`` (bool), ``snapshot_count`` (int), ``archive_cutoff``
+            (``datetime64[ns, UTC]``, ``NaT`` when none is set) and ``archive_location``. Sorted by name.
         """
-        return create_data_frame_from_series_array(_pp.get_rdf_db_scenario_table(self._check_open()))
+        frame = create_data_frame_from_series_array(_pp.get_rdf_db_scenario_table(self._check_open()))
+        text = frame['archive_cutoff']
+        frame['archive_cutoff'] = pd.to_datetime(text.where(text != '', None), utc=True)
+        return frame
 
     def versioned(self, scenario: str) -> bool:
         """
@@ -721,6 +725,45 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
             _version_to_str(from_version), _timestamp_to_str(from_timestamp), _version_to_str(to_version),
             _timestamp_to_str(to_timestamp)))
         return frame.reset_index(drop=True)
+
+    def set_archive_cutoff(self, scenario: str, cutoff: datetime.datetime, location: str) -> None:
+        """
+        Archive the states of a scenario before a moment: a read of a snapshot whose timestamp is before ``cutoff``
+        is refused with a message naming ``location``, the place the caller moved those states to.
+
+        The listings still show the archived snapshots. A root is not exempt, so set the cutoff at a
+        :meth:`rollover`: the later timestamps then start from its full state. A network standing at an archived
+        snapshot is reloaded (``'full'``) instead of walked from it.
+
+        Args:
+            scenario: the scenario
+            cutoff: the first moment still served, a timezone-aware datetime
+            location: where the earlier states went (a URL, a path, a name)
+        """
+        if cutoff is None:
+            raise TypeError('set_archive_cutoff() needs a cutoff; clear_archive_cutoff() removes one')
+        if not isinstance(location, str) or not location.strip():
+            raise ValueError(f'an archive location is required, for instance "s3://archive/2021-02-09", got '
+                             f'{location!r}')
+        _pp.set_rdf_db_archive_cutoff(self._check_open(), _check_scenario(scenario), _timestamp_to_str(cutoff),
+                                      location)
+
+    def clear_archive_cutoff(self, scenario: str) -> None:
+        """Serve every state of a scenario again: remove its archive cutoff."""
+        _pp.set_rdf_db_archive_cutoff(self._check_open(), _check_scenario(scenario), '', '')
+
+    def archive_cutoff(self, scenario: str) -> Optional[Tuple[datetime.datetime, str]]:
+        """
+        The archive cutoff of a scenario.
+
+        Returns:
+            ``(cutoff, location)``, the cutoff a UTC datetime; ``None`` when none is set
+        """
+        answer = _pp.get_rdf_db_archive_cutoff(self._check_open(), _check_scenario(scenario))
+        if not answer.get('cutoff'):
+            return None
+        cutoff = datetime.datetime.fromisoformat(answer['cutoff'].replace('Z', '+00:00'))
+        return cutoff, answer['location']
 
     def registry(self, scenario: str) -> VersionRegistry:
         """

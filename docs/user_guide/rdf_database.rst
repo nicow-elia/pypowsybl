@@ -425,6 +425,23 @@ for what holds at the second snapshot, ``reverse`` for what held at the first::
     changes = db.changes_between('2021-02-09', t1200, t1215)
     changes[changes['side'] == 'forward']
 
+Archiving the states before a cutoff
+------------------------------------
+
+A long-lived database moves old days out. :meth:`RdfDatabase.set_archive_cutoff` records a moment and the place the
+earlier states went; from then on a read of a snapshot whose timestamp is before the cutoff - a load, an update, an
+assembly, a bulk load, ``changes_between`` - is refused with the message *"snapshot (...) is in the archive at
+<location>: states before <cutoff> are not served by this store"*. The listings still show those snapshots. A root is
+not exempt, so set the cutoff at a rollover: the timestamps after it start from its full state. A network standing
+at an archived snapshot is reloaded (``'full'``) instead of walked from it::
+
+    db.rollover('2021-02-09', None, t1200)
+    db.set_archive_cutoff('2021-02-09', t1200, 's3://archive/2021-02-09')
+    db.archive_cutoff('2021-02-09')         # (t1200, 's3://archive/2021-02-09')
+    db.clear_archive_cutoff('2021-02-09')
+
+:meth:`RdfDatabase.scenarios` shows the cutoff of every scenario in ``archive_cutoff`` and ``archive_location``.
+
 Loading and updating
 --------------------
 

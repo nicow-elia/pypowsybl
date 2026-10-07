@@ -136,6 +136,8 @@ public final class RdfDbUtil {
                     .strings("modelling_authorities", ScenarioRow::modellingAuthorities)
                     .booleans("versioned", ScenarioRow::versioned)
                     .ints("snapshot_count", ScenarioRow::snapshotCount)
+                    .strings("archive_cutoff", ScenarioRow::archiveCutoff)
+                    .strings("archive_location", ScenarioRow::archiveLocation)
                     .build();
 
     private static final DataframeMapper<List<SnapshotInfo>, Void> SNAPSHOTS_MAPPER =
@@ -780,8 +782,11 @@ public final class RdfDbUtil {
      *                             an unversioned scenario
      * @param versioned     whether the scenario holds snapshots
      * @param snapshotCount how many snapshots it holds
+     * @param archiveCutoff the archive cutoff (ISO-8601 instant), empty when none is set
+     * @param archiveLocation where the states before the cutoff were archived, empty when no cutoff is set
      */
-    public record ScenarioRow(String scenario, String modellingAuthorities, boolean versioned, int snapshotCount) {
+    public record ScenarioRow(String scenario, String modellingAuthorities, boolean versioned, int snapshotCount,
+                              String archiveCutoff, String archiveLocation) {
     }
 
     /**
@@ -821,10 +826,39 @@ public final class RdfDbUtil {
             SnapshotCatalog catalog = db.snapshots(scenario);
             List<SnapshotInfo> snapshots = catalog.snapshots();
             String authorities = snapshots.isEmpty() ? "" : String.join(";", catalog.modellingAuthorities());
-            rows.add(new ScenarioRow(scenario, authorities, !snapshots.isEmpty(), snapshots.size()));
+            rows.add(new ScenarioRow(scenario, authorities, !snapshots.isEmpty(), snapshots.size(),
+                    catalog.archiveCutoff().map(Instant::toString).orElse(""), catalog.archiveLocation().orElse("")));
         }
         rows.sort(Comparator.comparing(ScenarioRow::scenario));
         return rows;
+    }
+
+    /**
+     * Set the archive cutoff of a scenario, or clear it: a read of a snapshot whose timestamp is before the cutoff is
+     * refused with a text naming where the states were archived. Listings still show those snapshots.
+     *
+     * @param db       the open connection
+     * @param scenario the scenario
+     * @param cutoff   the cutoff, an ISO-8601 instant; {@code null} or empty, together with the location, clears it
+     * @param location where the states before the cutoff were archived
+     */
+    public static void setArchiveCutoff(RdfDbConnection db, String scenario, String cutoff, String location) {
+        db.snapshots(requireScenario(scenario)).setArchiveCutoff(toInstant(cutoff), blankToNull(location));
+    }
+
+    /**
+     * The archive cutoff of a scenario.
+     *
+     * @param db       the open connection
+     * @param scenario the scenario
+     * @return {@code cutoff} (an ISO-8601 instant) and {@code location}, both empty when none is set
+     */
+    public static Map<String, String> archiveCutoff(RdfDbConnection db, String scenario) {
+        SnapshotCatalog catalog = db.snapshots(requireScenario(scenario));
+        Map<String, String> answer = new LinkedHashMap<>();
+        answer.put("cutoff", catalog.archiveCutoff().map(Instant::toString).orElse(""));
+        answer.put("location", catalog.archiveLocation().orElse(""));
+        return answer;
     }
 
     /**

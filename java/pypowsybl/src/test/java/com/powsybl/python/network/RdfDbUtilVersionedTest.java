@@ -502,6 +502,37 @@ class RdfDbUtilVersionedTest {
         }
     }
 
+    /** An archive cutoff refuses reads before it, naming where the states went; clearing it serves them again. */
+    @Test
+    void anArchiveCutoffRefusesReadsBeforeIt() {
+        try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
+            twoScenarios(db);
+            ingest(db, S, timestampFiles("t0815", 1.1, T0815, false), null, T0815);
+            ingest(db, S, timestampFiles("t0830", 1.2, T0830, false), null, T0830);
+            assertEquals(Map.of("cutoff", "", "location", ""), RdfDbUtil.archiveCutoff(db, S));
+
+            // the MicroGrid base timestamp is 10:30, so a cutoff at 08:30 archives 08:15 only
+            RdfDbUtil.setArchiveCutoff(db, S, T0830, "s3://archive/2014-06-01");
+            assertEquals(Map.of("cutoff", T0830, "location", "s3://archive/2014-06-01"),
+                    RdfDbUtil.archiveCutoff(db, S));
+            assertThat(RdfDbUtil.scenarioRows(db)).filteredOn(row -> row.scenario().equals(S))
+                    .allMatch(row -> row.archiveCutoff().equals(T0830)
+                            && row.archiveLocation().equals("s3://archive/2014-06-01"));
+            assertThatThrownBy(() -> load(db, S, null, T0815))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("is in the archive at s3://archive/2014-06-01");
+            assertThat(load(db, S, null, T0830).getLoads()).isNotEmpty();
+            assertThat(load(db, S, 1, null).getLoads()).isNotEmpty();
+            assertEquals(3, RdfDbUtil.snapshots(db, S).size(), "listings still show archived snapshots");
+            assertThatThrownBy(() -> RdfDbUtil.setArchiveCutoff(db, S, T0830, null))
+                    .isInstanceOf(PowsyblException.class);
+
+            RdfDbUtil.setArchiveCutoff(db, S, null, null);
+            assertEquals(Map.of("cutoff", "", "location", ""), RdfDbUtil.archiveCutoff(db, S));
+            assertThat(load(db, S, null, T0815).getLoads()).isNotEmpty();
+        }
+    }
+
     @Test
     void aRootAndThenVersionsFromARecording() {
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
@@ -823,7 +854,8 @@ class RdfDbUtilVersionedTest {
             Network network = twoScenarios(db);
             record(db, network, 1, T0830, 46.0);
 
-            assertEquals(List.of("scenario", "modelling_authorities", "versioned", "snapshot_count"),
+            assertEquals(List.of("scenario", "modelling_authorities", "versioned", "snapshot_count", "archive_cutoff",
+                            "archive_location"),
                     columns(RdfDbUtil.scenariosMapper(), RdfDbUtil.scenarioRows(db)));
             assertEquals(2, RdfDbUtil.scenarioRows(db).size());
             assertEquals(BE, RdfDbUtil.scenarioRows(db).stream().filter(row -> row.scenario().equals(S))

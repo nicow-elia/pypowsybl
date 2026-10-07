@@ -1975,6 +1975,18 @@ SeriesArray* getRdfDbChangesBetween(const JavaHandle& db, const std::string& sce
                                                                   (char*) toTimestamp.data()));
 }
 
+void setRdfDbArchiveCutoff(const JavaHandle& db, const std::string& scenario, const std::string& cutoff,
+                           const std::string& location) {
+    PowsyblCaller::get()->callJava<>(::setRdfDbArchiveCutoff, db, (char*) scenario.data(), (char*) cutoff.data(),
+                                     (char*) location.data());
+}
+
+std::map<std::string, std::string> getRdfDbArchiveCutoff(const JavaHandle& db, const std::string& scenario) {
+    string_map* cutoff = PowsyblCaller::get()->callJava<string_map*>(::getRdfDbArchiveCutoff, db,
+                                                                     (char*) scenario.data());
+    return convertMapStructToStdMap(cutoff);
+}
+
 JavaHandle createFlowDecomposition() {
     return PowsyblCaller::get()->callJava<JavaHandle>(::createFlowDecomposition);
 }

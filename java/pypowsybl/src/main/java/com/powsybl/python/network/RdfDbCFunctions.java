@@ -650,4 +650,32 @@ public final class RdfDbCFunctions {
             }
         });
     }
+
+    // ------------------------------------------------------------------ the archive cutoff
+
+    @CEntryPoint(name = "setRdfDbArchiveCutoff")
+    public static void setRdfDbArchiveCutoff(IsolateThread thread, ObjectHandle dbHandle, CCharPointer scenarioPtr,
+                                             CCharPointer cutoffPtr, CCharPointer locationPtr,
+                                             ExceptionHandlerPointer exceptionHandlerPtr) {
+        doCatch(exceptionHandlerPtr, new Runnable() {
+            @Override
+            public void run() {
+                RdfDbUtil.setArchiveCutoff(connection(dbHandle), CTypeUtil.toString(scenarioPtr), orNull(cutoffPtr),
+                        orNull(locationPtr));
+            }
+        });
+    }
+
+    @CEntryPoint(name = "getRdfDbArchiveCutoff")
+    public static PyPowsyblApiHeader.StringMap getRdfDbArchiveCutoff(IsolateThread thread, ObjectHandle dbHandle,
+                                                                     CCharPointer scenarioPtr,
+                                                                     ExceptionHandlerPointer exceptionHandlerPtr) {
+        return doCatch(exceptionHandlerPtr, new PointerProvider<>() {
+            @Override
+            public PyPowsyblApiHeader.StringMap get() {
+                return CTypeUtil.fromStringMap(RdfDbUtil.archiveCutoff(connection(dbHandle),
+                        CTypeUtil.toString(scenarioPtr)));
+            }
+        });
+    }
 }

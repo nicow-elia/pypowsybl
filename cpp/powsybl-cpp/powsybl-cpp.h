@@ -1122,6 +1122,15 @@ SeriesArray* getRdfDbChangesBetween(const JavaHandle& db, const std::string& sce
                                     const std::string& fromTimestamp, const std::string& toVersion,
                                     const std::string& toTimestamp);
 
+/**
+ * The archive cutoff of a scenario: set it (empty cutoff and location clear it), and read it back as "cutoff" (an
+ * ISO-8601 instant) and "location", both empty when none is set.
+ */
+void setRdfDbArchiveCutoff(const JavaHandle& db, const std::string& scenario, const std::string& cutoff,
+                           const std::string& location);
+
+std::map<std::string, std::string> getRdfDbArchiveCutoff(const JavaHandle& db, const std::string& scenario);
+
 JavaHandle createGLSKdocument(std::string& filename);
 
 std::vector<std::string> getGLSKinjectionkeys(pypowsybl::JavaHandle network, const JavaHandle& importer, std::string& country, long instant);
