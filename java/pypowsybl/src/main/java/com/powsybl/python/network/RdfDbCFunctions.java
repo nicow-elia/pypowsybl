@@ -552,4 +552,35 @@ public final class RdfDbCFunctions {
         });
     }
 
+    // ------------------------------------------------------------------ profiles stored whole
+
+    @CEntryPoint(name = "getRdfDbProfiles")
+    public static PyPowsyblApiHeader.StringMap getRdfDbProfiles(IsolateThread thread, ObjectHandle dbHandle,
+                                                                CCharPointer scenarioPtr, CCharPointer versionPtr,
+                                                                boolean exact, CCharPointer timestampPtr,
+                                                                CCharPointer modellingAuthorityPtr,
+                                                                ExceptionHandlerPointer exceptionHandlerPtr) {
+        return doCatch(exceptionHandlerPtr, new PointerProvider<>() {
+            @Override
+            public PyPowsyblApiHeader.StringMap get() {
+                return CTypeUtil.fromStringMap(RdfDbUtil.profiles(connection(dbHandle),
+                        CTypeUtil.toString(scenarioPtr), orNull(versionPtr), exact, orNull(timestampPtr),
+                        orNull(modellingAuthorityPtr)));
+            }
+        });
+    }
+
+    @CEntryPoint(name = "fetchRdfDbGraph")
+    public static ArrayPointer<SeriesPointer> fetchRdfDbGraph(IsolateThread thread, ObjectHandle dbHandle,
+                                                              CCharPointer scenarioPtr, CCharPointer graphPtr,
+                                                              ExceptionHandlerPointer exceptionHandlerPtr) {
+        return doCatch(exceptionHandlerPtr, new PointerProvider<>() {
+            @Override
+            public ArrayPointer<SeriesPointer> get() {
+                return Dataframes.createCDataframe(RdfDbUtil.statementsMapper(),
+                        RdfDbUtil.fetchGraph(connection(dbHandle), CTypeUtil.toString(scenarioPtr),
+                                CTypeUtil.toString(graphPtr)));
+            }
+        });
+    }
 }

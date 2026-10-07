@@ -433,8 +433,8 @@ def test_variant_argument_errors(rdf_db_url: str, scenario: str) -> None:
                                    parameters=PARAMS)
         with pytest.raises(ValueError, match='non-blank string'):
             pp.network.from_rdf_db(db, scenario, '1', variants={' ': T2000}, parameters=PARAMS)
-        with pytest.raises(ValueError, match="Unknown CGMES profile 'XX'"):
-            pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, profiles=['XX'],  # type: ignore[list-item]
+        with pytest.raises(ValueError, match="'X X' is not a profile name"):
+            pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, profiles=['X X'],
                                    parameters=PARAMS)
         with pytest.raises(ValueError, match='must be a timestamp or a'):
             pp.network.from_rdf_db(db, scenario, variants={'a': ('1', T2000)}, parameters=PARAMS)  # type: ignore

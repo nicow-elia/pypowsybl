@@ -43,6 +43,7 @@ import com.powsybl.dataframe.DataframeMapperBuilder;
 import com.powsybl.iidm.network.ImportConfig;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkFactory;
+import org.eclipse.rdf4j.model.Statement;
 
 import java.time.Duration;
 import java.time.Instant;
@@ -240,6 +241,16 @@ public final class RdfDbUtil {
                     .booleans("transient", RegistryRow::isTransient)
                     .build();
 
+    private static final DataframeMapper<List<StatementRow>, Void> STATEMENTS_MAPPER =
+            new DataframeMapperBuilder<List<StatementRow>, StatementRow, Void>()
+                    .itemsProvider(rows -> rows)
+                    .intsIndex("index", StatementRow::index)
+                    .strings("subject", StatementRow::subject)
+                    .strings("predicate", StatementRow::predicate)
+                    .strings("object", StatementRow::object)
+                    .booleans("is_iri", StatementRow::isIri)
+                    .build();
+
     private RdfDbUtil() {
     }
 
@@ -320,6 +331,66 @@ public final class RdfDbUtil {
         info.put("permissive", Boolean.toString(registry.isPermissive()));
         info.put("rev", Long.toString(registry.rev()));
         return info;
+    }
+
+    /**
+     * One statement of a graph, as {@code db.fetch_profile(...)} answers it.
+     *
+     * @param index     the position of the statement in the answer
+     * @param subject   the subject, an IRI or a blank node label
+     * @param predicate the predicate IRI
+     * @param object    the object: an IRI, or the lexical form of a literal
+     * @param isIri     whether the object is an IRI
+     */
+    public record StatementRow(int index, String subject, String predicate, String object, boolean isIri) {
+    }
+
+    /**
+     * The profiles of a snapshot that are stored as one whole graph, with that graph: every custom profile, and a
+     * standard one while it is still at its instance file.
+     *
+     * @param db                 the open connection
+     * @param scenario           the scenario
+     * @param version            the version name, {@code null} for the newest one
+     * @param exact              whether the read means exactly {@code version}
+     * @param timestamp          the timestamp, {@code null} or empty for the base timestamp
+     * @param modellingAuthority the modelling authority, {@code null} or empty for the only one of the scenario
+     * @return profile name to graph IRI, the standard profiles first
+     */
+    public static Map<String, String> profiles(RdfDbConnection db, String scenario, String version, boolean exact,
+                                               String timestamp, String modellingAuthority) {
+        SnapshotCatalog catalog = db.snapshots(requireScenario(scenario));
+        return new LinkedHashMap<>(catalog.graphsOf(ref(scenario, authority(catalog, modellingAuthority),
+                toInstant(timestamp), version, exact)));
+    }
+
+    /**
+     * Every statement of one stored graph, typically a custom profile the conversion never reads.
+     *
+     * @param db       the open connection
+     * @param scenario the scenario the graph belongs to
+     * @param graphIri the graph, as {@link #profiles} names it
+     * @return one row per statement
+     */
+    public static List<StatementRow> fetchGraph(RdfDbConnection db, String scenario, String graphIri) {
+        if (graphIri == null || graphIri.isBlank()) {
+            throw new PowsyblException("a graph IRI is required: take it from db.profiles(...)");
+        }
+        List<Statement> statements = db.fetchGraph(requireScenario(scenario), graphIri);
+        List<StatementRow> rows = new ArrayList<>(statements.size());
+        for (Statement statement : statements) {
+            rows.add(new StatementRow(rows.size(), statement.getSubject().stringValue(),
+                    statement.getPredicate().stringValue(), statement.getObject().stringValue(),
+                    statement.getObject().isIRI()));
+        }
+        return rows;
+    }
+
+    /**
+     * @return the mapper turning the statements of a graph into a dataframe
+     */
+    public static DataframeMapper<List<StatementRow>, Void> statementsMapper() {
+        return STATEMENTS_MAPPER;
     }
 
     /**
@@ -455,10 +526,15 @@ public final class RdfDbUtil {
     }
 
     /**
-     * Translate the CGMES profile identifiers a caller writes into the enum.
+     * Check the profile names a caller writes.
      *
-     * @param names the identifiers, for instance {@code SSH} or {@code EQ_BD}; case is ignored
+     * <p>A profile is a name: one of the nine the CGMES conversion reads ({@link Profiles#STANDARD}) or a custom one
+     * an application stores next to them ({@code OP}), named {@code [A-Z][A-Z0-9_]*}.</p>
+     *
+     * @param names the names, for instance {@code SSH}, {@code EQ_BD} or {@code OP}; surrounding blanks and case
+     *              are ignored
      * @return the profiles, or {@code null} when none was named (the default of the call)
+     * @throws RdfDbException if a name is not of the shape of a profile name
      */
     static Set<String> toProfiles(List<String> names) {
         if (names == null || names.isEmpty()) {
@@ -466,12 +542,7 @@ public final class RdfDbUtil {
         }
         Set<String> profiles = new LinkedHashSet<>();
         for (String name : names) {
-            String identifier = name.trim().toUpperCase(Locale.ROOT);
-            if (!Profiles.isStandard(identifier)) {
-                throw new RdfDbException("Unknown CGMES profile '" + name + "', expected one of "
-                        + List.copyOf(Profiles.STANDARD));
-            }
-            profiles.add(identifier);
+            profiles.add(Profiles.check(name.trim().toUpperCase(Locale.ROOT)));
         }
         return profiles;
     }
@@ -984,8 +1055,7 @@ public final class RdfDbUtil {
         CgmesDiffExport.ExportOptions exportOptions = NetworkEventRecording.diffOptions(rest);
         Set<String> projection = toProfiles(profiles);
         if (projection != null) {
-            // the recorder translates into the conversion's nine profiles only
-            exportOptions.setSubsets(projection.stream().map(p -> Profiles.subset(p).orElseThrow())
+            exportOptions.setSubsets(projection.stream().map(RdfDbUtil::recordedSubset)
                     .collect(Collectors.toCollection(() -> EnumSet.noneOf(CgmesSubset.class))));
         }
         if (variant != null) {
@@ -1008,6 +1078,13 @@ public final class RdfDbUtil {
                 version);
         return recording.exportWithSnapshot(events -> storedIds(
                 RdfDbExport.export(recording.getNetwork(), events, db, target, exportOptions, ReportNode.NO_OP)));
+    }
+
+    /** A recorder translates network changes, which only ever touch the profiles the conversion reads. */
+    private static CgmesSubset recordedSubset(String profile) {
+        return Profiles.subset(profile).orElseThrow(() -> new PowsyblException("recorded changes are written into"
+                + " the profiles the CGMES conversion reads, " + Profiles.STANDARD + ", and '" + profile
+                + "' is a custom one: store a custom profile with load_cgmes"));
     }
 
     /**

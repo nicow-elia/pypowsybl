@@ -228,9 +228,10 @@ per authority, an empty one where an authority has no snapshot then - which is w
 assembled from. Loading that assembly as *one* network is not supported: load each row and
 merge.
 
-``profiles`` is **not** part of the address. It is the projection of a call - which CGMES profiles it loads,
-updates, stores or compares (:data:`Profile`: ``'EQ'``, ``'SSH'``, ``'TP'``, ``'SV'``, ...) - and ``None`` is each
-call's default.
+``profiles`` is **not** part of the address. It is the projection of a call - which profiles it loads, updates,
+stores or compares - and ``None`` is each call's default. A profile is a name: the nine the CGMES conversion reads
+(:data:`PROFILES`: ``'EQ'``, ``'SSH'``, ``'TP'``, ``'SV'``, ...) or a custom one of the same shape,
+``[A-Z][A-Z0-9_]*`` (see `Custom profiles`_).
 
 A scenario becomes versioned when its instance files are uploaded with an address: that upload is the **root** of
 their authority's tree, and the ``md:Model.scenarioTime`` of the steady state file becomes its **base timestamp**.
@@ -366,6 +367,30 @@ The state each set derives from is materialised, the files are compared against 
 equipment model and the steady state hypothesis unless ``profiles`` names others - and the difference is stored, so
 what the database holds is the base plus what each timestamp changed, not ninety-six copies of the grid. The
 boundary has to be the one the scenario was rooted with; a changed boundary is refused rather than silently mixed in.
+
+Custom profiles
+---------------
+
+An application may keep data of its own next to the grid model - operational settings, a study's parameters - as
+one more instance file of the upload. Its profile is read off its name: a file the conversion does not recognise
+is named ``<base>_<PROFILE>.xml`` (``Grid_OP.xml`` holds the profile ``OP``; a version-like last token such as
+``V2`` is refused) and carries an ``md:FullModel`` header and the RDF and a CIM namespace declaration. Such a profile
+is **stored whole**, never as a difference, and the CGMES conversion **never reads it**: the network loaded from the
+snapshot is the network of the standard files alone. A root stores every custom profile its files carry; a further
+timestamp stores the custom files ``profiles`` names (a changed file becomes a new whole graph of that snapshot)
+and inherits the others from the state it derives from.
+
+:meth:`RdfDatabase.profiles` names, for a snapshot, every profile that is one whole graph - every custom one, and a
+standard one while it is still its instance file - with that graph; :meth:`RdfDatabase.fetch_profile` reads one
+graph as a dataframe of statements (``subject``, ``predicate``, ``object``, ``is_iri``)::
+
+    db.load_cgmes('day/base_with_OP.zip', '2021-02-09', '1', modelling_authority=elia)
+    graphs = db.profiles('2021-02-09')                  # {'EQ': ..., 'SSH': ..., 'OP': ...}
+    settings = db.fetch_profile('2021-02-09', graphs['OP'])
+    db.load_cgmes('day/2000_with_OP.zip', '2021-02-09', None, t2000, profiles=['EQ', 'SSH', 'OP'])
+
+A recorder writes network changes, which only touch the nine; naming a custom profile in
+:meth:`NetworkEventRecorder.to_rdf_updates` is refused.
 
 Loading and updating
 --------------------

@@ -392,6 +392,59 @@ class RdfDbUtilVersionedTest {
         }
     }
 
+    /**
+     * A profile is a name: a custom one is stored whole next to the standard ones, left out of the network and handed
+     * back as a graph of statements.
+     */
+    @Test
+    void aCustomProfileIsStoredWholeAndFetchedAsStatements() {
+        try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
+            assertThat(RdfDbUtil.loadCgmes(db, withCustomProfile(microGridBe(), "urn:uuid:cfg-1", BASE, "120"), S, "1",
+                    null, BE, List.of(), importParameters(), null)).contains("urn:uuid:cfg-1");
+            Map<String, String> graphs = RdfDbUtil.profiles(db, S, null, false, null, null);
+            assertThat(graphs).containsKey("CFG");
+            List<RdfDbUtil.StatementRow> rows = RdfDbUtil.fetchGraph(db, S, graphs.get("CFG"));
+            assertThat(rows).anyMatch(row -> row.subject().equals("http://example.org/cfg/setting-1")
+                    && row.predicate().equals(CFG_NS + "Setting.value") && row.object().equals("120") && !row.isIri());
+            assertThat(rows).anyMatch(row -> row.isIri() && row.object().equals("http://example.org/cfg/setting-1"));
+            assertEquals(List.of("index", "subject", "predicate", "object", "is_iri"),
+                    columns(RdfDbUtil.statementsMapper(), rows));
+
+            Network network = load(db, S, 1, null);
+            assertEquals(xiidm(Network.read(microGridBe(), importProperties())), xiidm(network),
+                    "the custom profile never reaches the conversion");
+            Network projected = RdfDbUtil.load(db, S, "1", false, null, null, List.of("EQ", "SSH", "TP", "SV", "CFG"),
+                    importParameters(), List.of(), null);
+            assertEquals(xiidm(RdfDbUtil.load(db, S, "1", false, null, null, List.of("EQ", "SSH", "TP", "SV"),
+                    importParameters(), List.of(), null)), xiidm(projected), "naming the custom profile changes nothing");
+
+            // a further timestamp that names the custom profile stores the changed file whole
+            ReadOnlyDataSource later = withCustomProfile(timestampFiles("cfg", 1.5, T0830, false), "urn:uuid:cfg-2",
+                    T0830, "130");
+            RdfDbUtil.loadCgmes(db, later, S, null, T0830, null, List.of("EQ", "SSH", "CFG"), importParameters(),
+                    null);
+            String laterGraph = RdfDbUtil.profiles(db, S, null, false, T0830, null).get("CFG");
+            assertThat(laterGraph).isNotEqualTo(graphs.get("CFG"));
+            assertThat(RdfDbUtil.fetchGraph(db, S, laterGraph)).anyMatch(row -> row.object().equals("130"));
+
+            assertThatThrownBy(() -> RdfDbUtil.load(db, S, "1", false, null, null, List.of("1X"), importParameters(),
+                    List.of(), null))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("'1X' is not a profile name");
+            assertThatThrownBy(() -> RdfDbUtil.fetchGraph(db, S, " "))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("a graph IRI is required");
+            NetworkEventRecording recording = new NetworkEventRecording(network);
+            recording.start();
+            network.getLoads().iterator().next().setP0(12.0);
+            recording.stop();
+            assertThatThrownBy(() -> RdfDbUtil.exportRecording(recording, db, S, null, null, null, List.of("CFG"),
+                    Map.of()))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("'CFG' is a custom one");
+        }
+    }
+
     @Test
     void aRootAndThenVersionsFromARecording() {
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
@@ -591,6 +644,47 @@ class RdfDbUtilVersionedTest {
                 ? content.replaceFirst("(<md:Model\\.modelingAuthoritySet>)[^<]*"
                         + "(</md:Model\\.modelingAuthoritySet>)", "$1" + ELSEWHERE + "$2")
                 : content);
+    }
+
+    /** The file name of a synthetic custom profile: its last token, {@code CFG}, is its profile. */
+    static final String CFG = "MicroGridTestConfiguration_BC_BE_CFG.xml";
+    /** The namespace of the synthetic custom profile. */
+    static final String CFG_NS = "http://example.org/Configuration/1#";
+
+    /**
+     * The MicroGrid BE files plus a custom profile {@code CFG} - three settings an application keeps next to the grid
+     * model, which the CGMES conversion knows nothing about.
+     */
+    static ReadOnlyDataSource withCustomProfile(ReadOnlyDataSource base, String modelId, String instant, String value) {
+        MemDataSource files = (MemDataSource) rewrite(base, (name, content) -> content);
+        String xml = """
+                <?xml version="1.0" encoding="UTF-8"?>
+                <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+                         xmlns:cim="http://iec.ch/TC57/2013/CIM-schema-cim16#"
+                         xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#"
+                         xmlns:cfg="%s">
+                  <md:FullModel rdf:about="%s">
+                    <md:Model.scenarioTime>%s</md:Model.scenarioTime>
+                    <md:Model.created>2014-06-01T09:00:00Z</md:Model.created>
+                    <md:Model.version>1</md:Model.version>
+                    <md:Model.profile>http://example.org/Configuration/1</md:Model.profile>
+                    <md:Model.modelingAuthoritySet>http://elia.be/CGMES/2.4.15</md:Model.modelingAuthoritySet>
+                  </md:FullModel>
+                  <cfg:Setting rdf:about="http://example.org/cfg/setting-1">
+                    <cfg:Setting.name>ramp limit</cfg:Setting.name>
+                    <cfg:Setting.value>%s</cfg:Setting.value>
+                  </cfg:Setting>
+                  <cfg:Setting rdf:about="http://example.org/cfg/setting-2">
+                    <cfg:Setting.next rdf:resource="http://example.org/cfg/setting-1"/>
+                  </cfg:Setting>
+                </rdf:RDF>
+                """.formatted(CFG_NS, modelId, instant, value);
+        try (OutputStream out = files.newOutputStream(CFG, false)) {
+            out.write(xml.getBytes(StandardCharsets.UTF_8));
+        } catch (IOException e) {
+            throw new UncheckedIOException(e);
+        }
+        return files;
     }
 
     /** A copy of every file of {@code source}, each one's content passed through {@code edit(name, content)}. */

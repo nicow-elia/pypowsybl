@@ -21,6 +21,7 @@ from .impl.rdf_db import (
     connect,
     from_rdf_db,
     Profile,
+    PROFILES,
     SnapshotAddress,
 )
 from .impl.node_breaker_topology import NodeBreakerTopology

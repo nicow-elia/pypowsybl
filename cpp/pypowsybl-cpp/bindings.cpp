@@ -1307,6 +1307,11 @@ PYBIND11_MODULE(_pypowsybl, m) {
     m.def("edit_rdf_db_registry", &pypowsybl::editRdfDbRegistry, "Run one operation on the version registry of a scenario",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("op"), py::arg("name"),
           py::arg("other"), py::arg("names"), py::arg("ranks"), py::arg("flag"));
+    m.def("get_rdf_db_profiles", &pypowsybl::getRdfDbProfiles, "The profiles a snapshot stores as one whole graph, with that graph",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("version"),
+          py::arg("exact"), py::arg("timestamp"), py::arg("modelling_authority"));
+    m.def("fetch_rdf_db_graph", &pypowsybl::fetchRdfDbGraph, "Create a series array of the statements of one stored graph",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("graph"));
     m.def("create_glsk_document", &pypowsybl::createGLSKdocument, "Create a glsk importer.", py::arg("filename"));
 
     m.def("get_glsk_injection_keys", &pypowsybl::getGLSKinjectionkeys, "Get glsk injection keys available for a country", py::arg("network"), py::arg("importer"), py::arg("country"), py::arg("instant"));

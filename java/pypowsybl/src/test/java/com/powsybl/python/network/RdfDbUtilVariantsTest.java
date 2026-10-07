@@ -329,9 +329,9 @@ class RdfDbUtilVariantsTest {
                     .isInstanceOf(PowsyblException.class)
                     .hasMessageContaining("must not be blank");
             assertThatThrownBy(() -> RdfDbUtil.loadVariants(db, S, List.of(""), List.of("1"), false, List.of(T0815),
-                    List.of(""), List.of("XX"), importParameters(), null, false))
+                    List.of(""), List.of("X X"), importParameters(), null, false))
                     .isInstanceOf(PowsyblException.class)
-                    .hasMessageContaining("Unknown CGMES profile 'XX'");
+                    .hasMessageContaining("'X X' is not a profile name");
         }
     }
 
@@ -441,10 +441,10 @@ class RdfDbUtilVariantsTest {
             RdfDbUtil.UpdateOutcome outcome = RdfDbUtil.update(network, db, S, "1", false, T0830, null,
                     List.of("EQ", "SSH"), Map.of(RdfDbUtil.VARIANT, "study"), importParameters(), null);
             assertEquals("diff", RdfDbUtil.updateInfo(outcome).get(RdfDbUtil.ROUTE));
-            assertThatThrownBy(() -> RdfDbUtil.update(network, db, S, "1", false, T0845, null, List.of("XX"), Map.of(),
+            assertThatThrownBy(() -> RdfDbUtil.update(network, db, S, "1", false, T0845, null, List.of("X X"), Map.of(),
                     importParameters(), null))
                     .isInstanceOf(PowsyblException.class)
-                    .hasMessageContaining("Unknown CGMES profile 'XX'");
+                    .hasMessageContaining("'X X' is not a profile name");
         }
     }
 

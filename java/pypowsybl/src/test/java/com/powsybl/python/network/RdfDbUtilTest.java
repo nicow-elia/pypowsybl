@@ -235,14 +235,15 @@ class RdfDbUtilTest {
     }
 
     @Test
-    void profileNamesAreTranslatedAndUnknownOnesAreNamedInTheError() {
+    void profilesAreNamesAndAMalformedOneIsNamedInTheError() {
         assertEquals(Set.of("SSH", "SV"), RdfDbUtil.toProfiles(List.of("ssh", " SV ")));
         assertEquals(Set.of("EQ_BD"), RdfDbUtil.toProfiles(List.of("EQ_BD")));
+        assertEquals(Set.of("EQ", "OP"), RdfDbUtil.toProfiles(List.of("EQ", "OP")), "a custom profile is a name too");
         assertEquals(null, RdfDbUtil.toProfiles(List.of()), "none named is the default of the call");
-        assertThatThrownBy(() -> RdfDbUtil.toProfiles(List.of("NOPE")))
+        assertThatThrownBy(() -> RdfDbUtil.toProfiles(List.of("O P")))
                 .isInstanceOf(RdfDbException.class)
-                .hasMessageContaining("Unknown CGMES profile 'NOPE'")
-                .hasMessageContaining("SSH");
+                .hasMessageContaining("'O P' is not a profile name")
+                .hasMessageContaining("[A-Z][A-Z0-9_]*");
     }
 
     @Test

@@ -34,8 +34,8 @@ from pandas import DataFrame
 import pypowsybl._pypowsybl as _pp
 from pypowsybl.utils import create_data_frame_from_series_array, path_to_str
 
-from .rdf_db import (Profile, _authority_to_str, _check_scenario, _check_variant, _profiles_to_list,
-                     _timestamp_to_str, _typed, _version_to_str)
+from .rdf_db import (_authority_to_str, _check_scenario, _check_variant, _profiles_to_list, _timestamp_to_str,
+                     _typed, _version_to_str)
 
 if TYPE_CHECKING:
     from .network import Network
@@ -322,7 +322,7 @@ class NetworkEventRecorder:
 
     def to_rdf_updates(self, db: 'RdfDatabase', scenario: str, version: Optional[str] = None,
                        timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
-                       profiles: Optional[Sequence[Profile]] = None, *, variant: Optional[str] = None,
+                       profiles: Optional[Sequence[str]] = None, *, variant: Optional[str] = None,
                        per_variant: bool = False, unsupported: str = 'raise', granularity: str = 'full_object',
                        clear: bool = True, **metadata: ProfileValue) -> Union[List[str], DataFrame]:
         """
@@ -345,7 +345,8 @@ class NetworkEventRecorder:
                 ``None`` is the base timestamp
             modelling_authority: the tree to write into; ``None`` for the only tree of the scenario, or - when it
                 holds several - the one of the snapshot the network is at
-            profiles: the CGMES profiles the difference may write, see :data:`pypowsybl.network.Profile`;
+            profiles: the CGMES profiles the difference may write, see :data:`pypowsybl.network.PROFILES` (a
+                custom profile is refused: recorded changes only touch the conversion's nine);
                 ``None`` for every profile a change touches. A change of another profile is an unsupported change,
                 handled as ``unsupported`` says
             variant: write the changes recorded on **one variant** as the successor of *that variant's* snapshot.

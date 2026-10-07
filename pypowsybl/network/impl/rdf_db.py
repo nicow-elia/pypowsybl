@@ -31,6 +31,7 @@ from __future__ import annotations  # Necessary for type alias like _DataFrame t
 
 import datetime
 import io
+import re
 from os import PathLike
 from types import TracebackType
 from typing import (Dict, List, Literal, Mapping, Optional, Sequence, Tuple, Type, Union, TYPE_CHECKING, cast,
@@ -51,13 +52,22 @@ _ON_REFUSAL = ('raise', 'skip')
 
 Profile = Literal['EQ', 'SSH', 'TP', 'SV', 'DY', 'DL', 'GL', 'EQ_BD', 'TP_BD']
 """
-A CGMES profile, as the ``profiles`` argument of the RDF database calls names it. ``profiles`` is a projection, never
-part of an address: it selects which profiles a call loads, updates, stores or compares, and ``None`` is the
-default of each call (every profile of a snapshot on a load, the equipment model and the steady state hypothesis on
-an update and on an ingestion).
+The nine CGMES profiles the conversion reads, as the ``profiles`` argument of the RDF database calls names them.
+``profiles`` is a projection, never part of an address: it selects which profiles a call loads, updates, stores or
+compares, and ``None`` is the default of each call (every profile of a snapshot on a load, the equipment model and
+the steady state hypothesis on an update and on an ingestion). A profile is a name, so a **custom** profile an
+application stores next to the nine - ``'OP'`` from a file ``..._OP.xml`` - is named the same way; see
+:data:`PROFILES`.
 """
 
-_PROFILES = get_args(Profile)
+PROFILES: Tuple[str, ...] = get_args(Profile)
+"""
+The names of the nine standard CGMES profiles, in the conversion's order: ``('EQ', 'SSH', 'TP', 'SV', 'DY', 'DL',
+'GL', 'EQ_BD', 'TP_BD')``. Any other name of the shape ``[A-Z][A-Z0-9_]*`` is a custom profile: it is stored whole,
+never read by the conversion, and handed back by :meth:`RdfDatabase.profiles` and :meth:`RdfDatabase.fetch_profile`.
+"""
+
+_PROFILE_NAME = re.compile(r'[A-Z][A-Z0-9_]*')
 
 SnapshotAddress = Tuple[Optional[str], datetime.datetime, Optional[str]]
 """
@@ -122,21 +132,24 @@ def _authority_to_str(modelling_authority: Optional[str]) -> str:
     return modelling_authority
 
 
-def _profiles_to_list(profiles: Optional[Sequence[Profile]]) -> List[str]:
+def _profiles_to_list(profiles: Optional[Sequence[str]]) -> List[str]:
     """
     Check a profile projection; ``None`` (the default of the call) is the empty list.
 
     Raises:
-        TypeError: a single string was given instead of a sequence
-        ValueError: a name is not a :data:`Profile`
+        TypeError: a single string was given instead of a sequence, or a name is not a string
+        ValueError: a name is not of the shape of a profile name, ``[A-Z][A-Z0-9_]*``
     """
     if profiles is None:
         return []
     if isinstance(profiles, str):
         raise TypeError(f'profiles takes a sequence of profiles, for instance [{profiles!r}], not one string')
     for profile in profiles:
-        if profile not in _PROFILES:
-            raise ValueError(f'Unknown CGMES profile {profile!r}, expected one of {list(_PROFILES)}')
+        if not isinstance(profile, str):
+            raise TypeError(f'a profile is a name, got {type(profile).__name__} {profile!r}')
+        if not _PROFILE_NAME.fullmatch(profile):
+            raise ValueError(f'{profile!r} is not a profile name: a profile is named [A-Z][A-Z0-9_]*, like one of '
+                             f'{list(PROFILES)} or a custom \'OP\'')
     return list(profiles)
 
 
@@ -568,6 +581,51 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
         return create_data_frame_from_series_array(
             _pp.get_rdf_db_models(self._check_open(), _check_scenario(scenario)))
 
+    def profiles(self, scenario: str, version: Optional[str] = None, timestamp: Optional[datetime.datetime] = None,
+                 modelling_authority: Optional[str] = None, *, exact: bool = False) -> Dict[str, str]:
+        """
+        The profiles of a snapshot that are stored as one whole graph, with that graph.
+
+        Every **custom** profile is such a graph - an application's own file stored next to the grid model, which the
+        CGMES conversion never reads - and so is a standard profile while the snapshot's state of it is still its
+        instance file (a profile written as differences has no single graph and is not listed). Read a graph with
+        :meth:`fetch_profile`.
+
+        Args:
+            scenario: the scenario
+            version: the version name, ``None`` for the newest one; otherwise the highest ranking version at or
+                below it
+            timestamp: the moment, a timezone-aware datetime; ``None`` for the base timestamp
+            modelling_authority: the tree; ``None`` for the only one of the scenario
+            exact: read exactly ``version``
+
+        Returns:
+            profile name to graph IRI, the standard profiles first
+        """
+        if exact and version is None:
+            raise ValueError('exact=True reads exactly the named version: give a version')
+        return _pp.get_rdf_db_profiles(self._check_open(), _check_scenario(scenario), _version_to_str(version), exact,
+                                       _timestamp_to_str(timestamp), _authority_to_str(modelling_authority))
+
+    def fetch_profile(self, scenario: str, graph: str) -> DataFrame:
+        """
+        Every statement of one stored graph - typically a custom profile, which a network loaded from the database
+        does not carry.
+
+        Args:
+            scenario: the scenario the graph belongs to
+            graph: the graph IRI, as :meth:`profiles` names it
+
+        Returns:
+            a dataframe with one row per statement and the columns ``subject``, ``predicate``, ``object`` (an IRI or
+            the lexical form of a literal) and ``is_iri`` (bool: whether ``object`` is an IRI)
+        """
+        if not isinstance(graph, str) or not graph.strip():
+            raise ValueError(f'a graph IRI is required, as db.profiles(...) names it, got {graph!r}')
+        frame = create_data_frame_from_series_array(
+            _pp.fetch_rdf_db_graph(self._check_open(), _check_scenario(scenario), graph))
+        return frame.reset_index(drop=True)
+
     def registry(self, scenario: str) -> VersionRegistry:
         """
         The version registry of a scenario: its version names and the ranks they are compared by.
@@ -611,7 +669,8 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
 
         Returns:
             a dataframe indexed by ``name`` (the context name, i.e. the instance file name) with the columns
-            ``subset`` (the CGMES subset: ``EQ``, ``SSH``, ``TP``, ``SV``, ``EQ_BD``, ...) and ``graph`` (the IRI
+            ``subset`` (the profile: ``EQ``, ``SSH``, ``TP``, ``SV``, ``EQ_BD``, ..., or a custom one; empty for a
+            file whose name names none) and ``graph`` (the IRI
             of the named graph in the database)
         """
         return create_data_frame_from_series_array(
@@ -628,7 +687,7 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
 
     def load_cgmes(self, file: Union[str, PathLike], scenario: str, version: Optional[str] = None,
                    timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
-                   profiles: Optional[Sequence[Profile]] = None, *, parameters: Optional[Dict[str, str]] = None,
+                   profiles: Optional[Sequence[str]] = None, *, parameters: Optional[Dict[str, str]] = None,
                    report_node: Optional[ReportNode] = None) -> List[str]:
         """
         Read CGMES instance files into a scenario of the database.
@@ -668,7 +727,9 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
                 headers agree on (refused when they do not). Adding the tree of a *second* authority to a versioned
                 scenario names it
             profiles: for a root, the profiles to store (``None``: every profile the files carry); for a further
-                snapshot, the profiles to compare (``None``: ``EQ`` and ``SSH``)
+                snapshot, the profiles to compare (``None``: ``EQ`` and ``SSH``). A custom profile - a file named
+                ``<base>_<PROFILE>.xml`` with an ``md:FullModel`` header, ``OP`` for ``Grid_OP.xml`` - is stored
+                whole: by a root always, by a further snapshot when ``profiles`` names it
             parameters: a dictionary of CGMES import parameters; only the ones that influence how identifiers are
                 read matter here, and the very same ones must be passed to :func:`from_rdf_db`
             report_node: the reporter to be used to create an execution report, default is None (no report)
@@ -678,7 +739,7 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
 
         Raises:
             TypeError: a naive ``timestamp``, or a ``version`` that is not a str
-            ValueError: a ``profiles`` entry that is not a :data:`Profile`
+            ValueError: a ``profiles`` entry that is not a profile name
             pypowsybl.PyPowsyblError: the scenario is versioned and nothing was addressed, the version does not
                 rank above the head's or is not registered in a strict registry, the boundary is not the one the scenario shares, or the files changed
                 nothing
@@ -696,7 +757,7 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
     def load_cgmes_from_binary_buffers(self, buffers: List[io.BytesIO], scenario: str, version: Optional[str] = None,
                                        timestamp: Optional[datetime.datetime] = None,
                                        modelling_authority: Optional[str] = None,
-                                       profiles: Optional[Sequence[Profile]] = None, *,
+                                       profiles: Optional[Sequence[str]] = None, *,
                                        parameters: Optional[Dict[str, str]] = None,
                                        report_node: Optional[ReportNode] = None) -> List[str]:
         """
@@ -868,7 +929,7 @@ def _check_refusals(network: 'Network', on_refusal: str) -> None:
 
 def from_rdf_db(db: RdfDatabase, scenario: str, version: Optional[str] = None,
                 timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
-                profiles: Optional[Sequence[Profile]] = None, *, exact: bool = False,
+                profiles: Optional[Sequence[str]] = None, *, exact: bool = False,
                 timestamps: Optional[Sequence[datetime.datetime]] = None,
                 variants: Optional[Mapping[str, Union[datetime.datetime, SnapshotAddress]]] = None,
                 on_refusal: str = 'raise', parameters: Optional[Dict[str, str]] = None,
@@ -906,7 +967,8 @@ def from_rdf_db(db: RdfDatabase, scenario: str, version: Optional[str] = None,
         timestamp: the moment, a timezone-aware :class:`datetime.datetime`; ``None`` is the base timestamp. A
             naive datetime raises :class:`TypeError`
         modelling_authority: the tree to load from; ``None`` for the only one of the scenario
-        profiles: the CGMES profiles to load, see :data:`Profile`; ``None`` loads every profile of the snapshot.
+        profiles: the profiles to load, see :data:`PROFILES`; ``None`` loads every profile of the snapshot. A
+            custom profile is never part of the network (read it with :meth:`RdfDatabase.fetch_profile`).
             With ``timestamps``/``variants`` they are the profiles each variant is brought forward by
         exact: read exactly ``version`` (and every named version of ``variants``) instead of the highest ranking
             version at or below it; a timestamp that does not hold it is an error. Needs a ``version``

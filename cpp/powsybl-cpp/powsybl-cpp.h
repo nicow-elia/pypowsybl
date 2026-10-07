@@ -1093,6 +1093,17 @@ std::map<std::string, std::string> editRdfDbRegistry(const JavaHandle& db, const
                                                      const std::string& other, const std::vector<std::string>& names,
                                                      const std::vector<int>& ranks, bool flag);
 
+/**
+ * Profiles stored as one whole graph at a snapshot (every custom profile, a standard one while still at its instance
+ * file), profile name to graph IRI; and every statement of one such graph.
+ */
+std::map<std::string, std::string> getRdfDbProfiles(const JavaHandle& db, const std::string& scenario,
+                                                    const std::string& version, bool exact,
+                                                    const std::string& timestamp,
+                                                    const std::string& modellingAuthority);
+
+SeriesArray* fetchRdfDbGraph(const JavaHandle& db, const std::string& scenario, const std::string& graph);
+
 JavaHandle createGLSKdocument(std::string& filename);
 
 std::vector<std::string> getGLSKinjectionkeys(pypowsybl::JavaHandle network, const JavaHandle& importer, std::string& country, long instant);

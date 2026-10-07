@@ -197,12 +197,12 @@ def test_an_empty_scenario_is_an_error_that_says_which_scenarios_exist(rdf_db_ur
             pp.network.from_rdf_db(db, 'not-a-day', parameters=PARAMS)
 
 
-def test_an_unknown_profile_is_refused_with_the_known_ones(rdf_db_url: str, scenario: str) -> None:
+def test_a_malformed_profile_is_refused_with_the_known_ones(rdf_db_url: str, scenario: str) -> None:
     network = load_from_files()
     with pp.network.connect(rdf_db_url) as db:
         db.load_cgmes(CGMES_ZIP, scenario, parameters=PARAMS)
-        with pytest.raises(ValueError, match="Unknown CGMES profile 'NOPE'.*'SSH'"):
-            network.update_from_rdf_db(db, scenario, profiles=['NOPE'])  # type: ignore[list-item]
+        with pytest.raises(ValueError, match="'no pe' is not a profile name.*'SSH'"):
+            network.update_from_rdf_db(db, scenario, profiles=['no pe'])
 
 
 def test_the_connection_is_a_context_manager_and_closes_once() -> None:

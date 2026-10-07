@@ -1918,6 +1918,22 @@ std::map<std::string, std::string> editRdfDbRegistry(const JavaHandle& db, const
     return convertMapStructToStdMap(info);
 }
 
+std::map<std::string, std::string> getRdfDbProfiles(const JavaHandle& db, const std::string& scenario,
+                                                    const std::string& version, bool exact,
+                                                    const std::string& timestamp,
+                                                    const std::string& modellingAuthority) {
+    string_map* profiles = PowsyblCaller::get()->callJava<string_map*>(::getRdfDbProfiles, db, (char*) scenario.data(),
+                                                                       (char*) version.data(), exact,
+                                                                       (char*) timestamp.data(),
+                                                                       (char*) modellingAuthority.data());
+    return convertMapStructToStdMap(profiles);
+}
+
+SeriesArray* fetchRdfDbGraph(const JavaHandle& db, const std::string& scenario, const std::string& graph) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::fetchRdfDbGraph, db, (char*) scenario.data(),
+                                                                  (char*) graph.data()));
+}
+
 JavaHandle createFlowDecomposition() {
     return PowsyblCaller::get()->callJava<JavaHandle>(::createFlowDecomposition);
 }

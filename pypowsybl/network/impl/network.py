@@ -51,7 +51,6 @@ from .nad_parameters import NadParameters
 from .edge_info_parameters import EdgeInfoParameters
 from .nad_profile import NadProfile
 from .rdf_db import (
-    Profile,
     RdfDbVariantRefusedError,
     _authority_to_str,
     _check_scenario,
@@ -327,7 +326,7 @@ class Network:  # pylint: disable=too-many-public-methods
 
     def update_from_rdf_db(self, db: 'RdfDatabase', scenario: str, version: Optional[str] = None,
                            timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
-                           profiles: Optional[Sequence[Profile]] = None, *, exact: bool = False,
+                           profiles: Optional[Sequence[str]] = None, *, exact: bool = False,
                            variant: Optional[str] = None,
                            parameters: Optional[Dict[str, str]] = None,
                            report_node: Optional[ReportNode] = None, max_diff_chain: int = 200) -> str:
@@ -363,7 +362,7 @@ class Network:  # pylint: disable=too-many-public-methods
                            version at or below it
            timestamp:      the moment, a timezone-aware :class:`datetime.datetime`; ``None`` is the base timestamp
            modelling_authority: the tree of the target; ``None`` for the only one of the scenario
-           profiles:       the CGMES profiles the update looks at, see :data:`pypowsybl.network.Profile`. On a
+           profiles:       the profiles the update looks at, see :data:`pypowsybl.network.PROFILES`. On a
                            versioned scenario they are the projection a network without database provenance is
                            identified by (``None``: ``EQ`` and ``SSH``). On an **un-versioned** scenario, with
                            nothing addressed, they are the profiles replaced from the stored graphs (``None``: the

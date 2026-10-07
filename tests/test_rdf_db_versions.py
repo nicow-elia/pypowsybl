@@ -361,18 +361,101 @@ def test_latest_at_or_below_and_exact(rdf_db_url: str, scenario: str) -> None:
             pp.network.from_rdf_db(db, scenario, 'RT', timestamps=[at('20:30')], exact=True, parameters=PARAMS)
 
 
-def test_profiles_literal(rdf_db_url: str, scenario: str) -> None:
-    """``profiles`` takes :data:`pypowsybl.network.Profile` names; anything else is refused by name."""
+def test_profiles_are_names(rdf_db_url: str, scenario: str) -> None:
+    """
+    ``profiles`` takes names: the nine of :data:`pypowsybl.network.PROFILES` and custom ones of the same shape; a
+    name of another shape is refused by name.
+    """
+    assert pp.network.PROFILES == ('EQ', 'SSH', 'TP', 'SV', 'DY', 'DL', 'GL', 'EQ_BD', 'TP_BD')
     with pp.network.connect(rdf_db_url) as db:
         network = _root(db, scenario)
-        with pytest.raises(ValueError, match="'XX'"):
-            pp.network.from_rdf_db(db, scenario, '1', profiles=['EQ', 'XX'])  # type: ignore[list-item]
-        with pytest.raises(ValueError, match="'XX'"):
-            network.update_from_rdf_db(db, scenario, '1', profiles=['XX'])  # type: ignore[list-item]
+        with pytest.raises(ValueError, match="'x' is not a profile name"):
+            pp.network.from_rdf_db(db, scenario, '1', profiles=['EQ', 'x'])
+        with pytest.raises(ValueError, match="'1X' is not a profile name"):
+            network.update_from_rdf_db(db, scenario, '1', profiles=['1X'])
         with pytest.raises(TypeError, match='not one string'):
             pp.network.from_rdf_db(db, scenario, '1', profiles='SSH')  # type: ignore[arg-type]
-        # a projection that names the default changes nothing
+        with pytest.raises(TypeError, match='a profile is a name'):
+            pp.network.from_rdf_db(db, scenario, '1', profiles=[1])  # type: ignore[list-item]
+        # a projection that names the default changes nothing; a well-formed name the snapshot lacks is refused by
+        # the database, naming what it holds
         assert network.update_from_rdf_db(db, scenario, '1', profiles=['EQ', 'SSH']) == 'noop'
+        with pytest.raises(PyPowsyblError, match=re.escape('holds no [OP]; it holds [EQ, EQ_BD, SSH, SV, TP]')):
+            pp.network.from_rdf_db(db, scenario, '1', profiles=['EQ', 'SSH', 'TP', 'SV', 'OP'], parameters=PARAMS)
+
+
+_CFG_NS = 'http://example.org/Configuration/1#'
+
+
+def _with_custom_profile(source: io.BytesIO, model_id: str, value: str) -> io.BytesIO:
+    """A zip of instance files plus ``cgmes_CFG.xml``: a custom profile ``CFG``, three statements on two settings."""
+    xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:cim="http://iec.ch/TC57/CIM100#"
+         xmlns:md="http://iec.ch/TC57/61970-552/ModelDescription/1#" xmlns:cfg="{_CFG_NS}">
+  <md:FullModel rdf:about="{model_id}">
+    <md:Model.scenarioTime>2021-02-09T19:30:00Z</md:Model.scenarioTime>
+    <md:Model.created>2021-02-09T09:00:00Z</md:Model.created>
+    <md:Model.version>1</md:Model.version>
+    <md:Model.profile>http://example.org/Configuration/1</md:Model.profile>
+    <md:Model.modelingAuthoritySet>{AUTHORITY}</md:Model.modelingAuthoritySet>
+  </md:FullModel>
+  <cfg:Setting rdf:about="http://example.org/cfg/setting-1">
+    <cfg:Setting.name>ramp limit</cfg:Setting.name>
+    <cfg:Setting.value>{value}</cfg:Setting.value>
+  </cfg:Setting>
+  <cfg:Setting rdf:about="http://example.org/cfg/setting-2">
+    <cfg:Setting.next rdf:resource="http://example.org/cfg/setting-1"/>
+  </cfg:Setting>
+</rdf:RDF>
+"""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as target:
+        for entry in archive.namelist():
+            target.writestr(entry, archive.read(entry))
+        target.writestr('cgmes_CFG.xml', xml)
+    buffer.seek(0)
+    return buffer
+
+
+def test_custom_profile_round_trip(rdf_db_url: str, scenario: str) -> None:
+    """
+    A custom profile is stored whole next to the grid model, never reaches the network, and comes back from the
+    database as a dataframe of statements; a later timestamp that names it stores its new file whole.
+    """
+    with open(CGMES_ZIP, 'rb') as files:
+        root = _with_custom_profile(io.BytesIO(files.read()), 'urn:uuid:cfg-1-' + scenario, '120')
+    with pp.network.connect(rdf_db_url) as db:
+        db.load_cgmes_from_binary_buffers([root], scenario, '1', modelling_authority=AUTHORITY, parameters=PARAMS)
+        graphs = db.profiles(scenario)
+        assert 'CFG' in graphs
+        statements = db.fetch_profile(scenario, graphs['CFG'])
+        assert list(statements.columns) == ['subject', 'predicate', 'object', 'is_iri']
+        assert set(statements['subject']) == {'urn:uuid:cfg-1-' + scenario, 'http://example.org/cfg/setting-1',
+                                              'http://example.org/cfg/setting-2'}, 'the header travels with the graph'
+        value = statements[statements['predicate'] == _CFG_NS + 'Setting.value']
+        assert value['subject'].tolist() == ['http://example.org/cfg/setting-1']
+        assert value['object'].tolist() == ['120'] and not bool(value['is_iri'].iloc[0])
+        assert bool(statements[statements['predicate'] == _CFG_NS + 'Setting.next']['is_iri'].iloc[0])
+        assert 'CFG' in db.snapshots(scenario)['profiles'].iloc[0].split(';')
+
+        network = pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
+        assert_same_network(pp.network.load(CGMES_ZIP, PARAMS), network, rdf_db_url)
+
+        later = _with_custom_profile(ssh_variant(1, at('20:00'), suffix=scenario), 'urn:uuid:cfg-2-' + scenario,
+                                     '130')
+        db.load_cgmes_from_binary_buffers([later], scenario, None, at('20:00'), profiles=['EQ', 'SSH', 'CFG'],
+                                          parameters=PARAMS)
+        moved = db.profiles(scenario, None, at('20:00'))['CFG']
+        assert moved != graphs['CFG']
+        assert '130' in db.fetch_profile(scenario, moved)['object'].tolist()
+        assert db.fetch_profile(scenario, graphs['CFG'])['object'].tolist().count('120') == 1, 'the root keeps its own'
+        with pytest.raises(ValueError, match='a graph IRI is required'):
+            db.fetch_profile(scenario, ' ')
+
+        with network.event_recorder() as recorder:
+            _change_a_load(network, 503.0)
+            with pytest.raises(PyPowsyblError, match="'CFG' is a custom one"):
+                recorder.to_rdf_updates(db, scenario, None, at('20:30'), profiles=['CFG'])
 
 
 def test_files_of_several_authorities_need_one_named(rdf_db_url: str, scenario: str) -> None:
