@@ -52,12 +52,14 @@ from .edge_info_parameters import EdgeInfoParameters
 from .nad_profile import NadProfile
 from .rdf_db import (
     RdfDbVariantRefusedError,
-    Timestep,
+    _authority_to_str,
     _check_scenario,
     _check_variant,
+    _profiles_to_list,
     _report_handle,
     _split_reasons,
-    _timestep_to_str,
+    _timestamp_to_str,
+    _typed,
     _version_to_str,
 )
 from .sld_profile import SldProfile
@@ -323,8 +325,9 @@ class Network:  # pylint: disable=too-many-public-methods
         self.update_from_binary_buffers([buffer], parameters, post_processors, report_node)
 
     def update_from_rdf_db(self, db: 'RdfDatabase', scenario: str, version: Optional[str] = None,
-                           timestep: 'Timestep' = None, *, variant: Optional[str] = None,
-                           subsets: Optional[List[str]] = None,
+                           timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
+                           profiles: Optional[Sequence[str]] = None, *, exact: bool = False,
+                           variant: Optional[str] = None,
                            parameters: Optional[Dict[str, str]] = None,
                            report_node: Optional[ReportNode] = None, max_diff_chain: int = 200) -> str:
         """
@@ -333,8 +336,8 @@ class Network:  # pylint: disable=too-many-public-methods
         One query decides how. The network is **already** at the target and nothing happens (``'noop'``); or the
         target is reachable by applying stored differences - forwards, backwards, or up one branch of the version
         chain and down another - which are fetched in one request and applied in place (``'diff'``); or it is not,
-        and the network is rebuilt from the database (``'full'``). A target in *another scenario* is always a
-        rebuild, decided without a query, because differences never cross scenarios.
+        and the network is rebuilt from the database (``'full'``). A target in *another scenario* or of *another
+        modelling authority* is always a rebuild, decided without a query, because differences never cross them.
 
         With ``variant=`` the routes describe the **difference**, not whether anything happened: a ``'noop'``
         still creates the variant when it did not exist, by cloning one that already stands for the target. Ask
@@ -355,9 +358,16 @@ class Network:  # pylint: disable=too-many-public-methods
            db:             an open connection, see :func:`pypowsybl.network.connect_rdf_db`
            scenario:       the base scenario (grid model / day) to bring the network to, for instance
                            ``"2021-02-09"``; required, never guessed
-           version:        the snapshot version label, ``None`` for the newest one
-           timestep:       the moment of the scenario's day, see :data:`pypowsybl.network.Timestep`; ``None`` is the
-                           base timestep
+           version:        the snapshot version, a name; ``None`` for the newest one, a name the highest ranking
+                           version at or below it
+           timestamp:      the moment, a timezone-aware :class:`datetime.datetime`; ``None`` is the base timestamp
+           modelling_authority: the tree of the target; ``None`` for the only one of the scenario
+           profiles:       the profiles the update looks at, see :data:`pypowsybl.network.PROFILES`. On a
+                           versioned scenario they are the projection a network without database provenance is
+                           identified by (``None``: ``EQ`` and ``SSH``). On an **un-versioned** scenario, with
+                           nothing addressed, they are the profiles replaced from the stored graphs (``None``: the
+                           steady-state pair) - the legacy profile replacement, which answers ``'update'``
+           exact:          bring the network to exactly ``version``; a timestamp that does not hold it is an error
            variant:        create or update **one variant** so that it stands for the snapshot, leaving every other
                            variant of the network - and the working variant of the caller - exactly as it is. A
                            variant that does not exist is created by cloning the one nearest to the target; a
@@ -370,9 +380,6 @@ class Network:  # pylint: disable=too-many-public-methods
                            ``per_variant=True`` switches it on in the same way. Cloning a variant yourself does
                            **not**; and while the network is *not* in variant mode, a classic call like this one
                            forgets what the variants you cloned stood for (see :meth:`variants_binding`)
-           subsets:        the legacy profile-replacement flow of the un-versioned scenarios: the CGMES subsets to
-                           read (``'SSH'``, ``'SV'``, ...), applied in place. It returns ``'update'`` and may not be
-                           combined with a ``version`` or a ``timestep``
            parameters:     a dictionary of CGMES import parameters
            report_node:    the reporter to be used to create an execution report, default is None (no report)
            max_diff_chain: how many stored differences the fast route may apply before a rebuild is cheaper
@@ -380,13 +387,12 @@ class Network:  # pylint: disable=too-many-public-methods
 
         Returns:
             ``'noop'``, ``'diff'`` or ``'full'``. There is a fourth answer, ``'update'``, and it means "no snapshot
-            was addressed": it comes back from the legacy ``subsets`` flow, and from an **un-versioned scenario**
-            named without a version and a timestep, where the only thing that can happen is that the profiles are
-            replaced from the graphs that are stored there.
+            was addressed": it comes back from an **un-versioned scenario** named without an address, where the
+            only thing that can happen is that the profiles are replaced from the graphs that are stored there.
 
         Raises:
-            ValueError: ``max_diff_chain`` is smaller than 1, or ``subsets`` is combined with a version, a
-                timestep or a variant
+            TypeError: a naive ``timestamp``, or a ``version`` that is not a str
+            ValueError: ``max_diff_chain`` is smaller than 1, an unknown profile, or ``exact`` without a version
             pypowsybl.network.RdfDbVariantRefusedError: the snapshot cannot be reached inside a variant; the
                 network and all of its variants are exactly as they were
             pypowsybl.PyPowsyblError: the scenario or the snapshot does not exist, or the database cannot be reached
@@ -394,22 +400,23 @@ class Network:  # pylint: disable=too-many-public-methods
         Examples:
             .. code-block:: python
 
-                network.update_from_rdf_db(db, '2021-02-09', '1.3', '8:30')
-                network.update_from_rdf_db(db, '2021-02-09', '1.3', '9:00', variant='9:00')
+                t = datetime(2021, 2, 9, 8, 30, tzinfo=timezone.utc)
+                network.update_from_rdf_db(db, '2021-02-09', '3', t)
+                network.update_from_rdf_db(db, '2021-02-09', '3', t + timedelta(minutes=30), variant='09:00')
         """
         _check_scenario(scenario)
         if max_diff_chain < 1:
             raise ValueError(f'max_diff_chain is at least 1, got {max_diff_chain}')
-        if subsets and (version is not None or timestep is not None or variant is not None):
-            raise ValueError('subsets= is the legacy profile replacement of an un-versioned scenario and addresses '
-                             'no snapshot; it cannot be combined with a version, a timestep or a variant')
+        if exact and version is None:
+            raise ValueError('exact=True brings the network to exactly the named version: give a version')
         options = {'max_diff_chain': str(max_diff_chain)}
         if variant is not None:
             options['variant'] = _check_variant(variant)
         outcome = _pp.update_network_from_rdf_db(self._handle, db._check_open(),  # pylint: disable=protected-access
-                                                 scenario, _version_to_str(version), _timestep_to_str(timestep),
-                                                 [] if subsets is None else subsets, options,
-                                                 {} if parameters is None else parameters,
+                                                 scenario, _version_to_str(version), exact,
+                                                 _timestamp_to_str(timestamp),
+                                                 _authority_to_str(modelling_authority), _profiles_to_list(profiles),
+                                                 options, {} if parameters is None else parameters,
                                                  _report_handle(report_node))
         info = _pp.get_rdf_db_update_info(outcome)
         route = info['route']
@@ -448,8 +455,10 @@ class Network:  # pylint: disable=too-many-public-methods
                       swapped in for the duration of the read
 
         Returns:
-            a dictionary that may hold ``scenario``, ``snapshot`` (the snapshot IRI), ``version``, ``timestep``,
-            ``label`` and one entry per CGMES profile (``'EQ'``, ``'SSH'``, ...) naming the model it is at. Empty
+            a dictionary that may hold ``scenario``, ``snapshot`` (the snapshot IRI), ``modelling_authority``,
+            ``timestamp`` (ISO-8601 instant), ``version`` (the version name), for a network loaded with
+            ``authorities=[...]`` ``composition`` and ``owned`` (``;``-joined modelling authorities, in precedence
+            order; such a network has no single ``snapshot``) and one entry per CGMES profile (``'EQ'``, ``'SSH'``, ...) naming the model it is at. Empty
             when the network has no CGMES identity at all.
 
         Raises:
@@ -471,8 +480,9 @@ class Network:  # pylint: disable=too-many-public-methods
 
         Returns:
             a dataframe indexed by ``variant`` with the columns ``scenario``, ``snapshot`` (the snapshot IRI),
-            ``version``, ``timestep`` (ISO instant), ``label`` (``HH:MM``), ``cloned_from``, ``eq`` and ``ssh``
-            (the stored model the variant is at), ``case_date``, ``status`` and ``reasons``.
+            ``modelling_authority``, ``timestamp`` (``datetime64[ns, UTC]``), ``version`` (the name, ``None`` for a
+            variant that stands for no snapshot), ``cloned_from``, ``eq`` and ``ssh`` (the stored
+            model the variant is at), ``case_date``, ``status`` and ``reasons``.
 
             ``status`` is ``primary`` for the network's own identity (``'InitialState'``), ``bound`` for a variant
             that stands for a snapshot - including one you cloned yourself, which inherits the binding of its
@@ -483,8 +493,6 @@ class Network:  # pylint: disable=too-many-public-methods
             The index is always unique. A refusal that named a variant which *exists* - one that was asked to move
             and stayed where it was - puts its reasons on that variant's own row instead of adding a second one,
             so ``status`` keeps saying what the variant still stands for and ``reasons`` says why it did not move.
-            A ``refused`` row has an empty ``label``: nothing was bound, so there is no case date to read the
-            scenario's offset from.
 
             A variant you cloned is only tracked **until the next classic operation**: as long as the network is
             not in variant mode, :meth:`update_from_rdf_db` without a ``variant``, the profile replacement and the
@@ -497,10 +505,10 @@ class Network:  # pylint: disable=too-many-public-methods
         Examples:
             .. code-block:: python
 
-                day = pp.network.from_rdf_db(db, '2021-02-09', '1.1', timesteps=['8:00', '8:15'])
-                day.variants_binding()[['timestep', 'status']]
+                day = pp.network.from_rdf_db(db, '2021-02-09', '1', timestamps=[t, t + timedelta(minutes=15)])
+                day.variants_binding()[['timestamp', 'version', 'status']]
         """
-        return create_data_frame_from_series_array(_pp.get_network_rdf_db_variants(self._handle))
+        return _typed(create_data_frame_from_series_array(_pp.get_network_rdf_db_variants(self._handle)))
 
     def _replace_handle(self, handle: _pp.JavaHandle) -> None:
         """

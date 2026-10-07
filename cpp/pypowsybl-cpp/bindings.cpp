@@ -28,7 +28,10 @@ py::bytes saveNetworkToBinaryBufferPython(const pypowsybl::JavaHandle& network, 
 void updateNetworkFromBinaryBuffersPython(const pypowsybl::JavaHandle& network, std::vector<py::buffer> byteBuffers, const std::map<std::string, std::string>& parameters, const std::vector<std::string>& postProcessors, pypowsybl::JavaHandle* reportNode);
 
 std::vector<std::string> loadCgmesBuffersToRdfDbPython(const pypowsybl::JavaHandle& db, std::vector<py::buffer> byteBuffers,
-                                                       const std::string& scenario, const std::string& version, const std::string& timestep,
+                                                       const std::string& scenario, const std::string& version, const std::string& timestamp,
+                                                       const std::string& modellingAuthority, const std::vector<std::string>& profiles,
+                                                       bool hasPin, const std::string& pinVersion, const std::string& pinTimestamp,
+                                                       const std::string& pinAuthority,
                                                        const std::map<std::string, std::string>& parameters, pypowsybl::JavaHandle* reportNode);
 
 
@@ -1239,18 +1242,22 @@ PYBIND11_MODULE(_pypowsybl, m) {
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"));
     m.def("load_cgmes_to_rdf_db", &pypowsybl::loadCgmesToRdfDb, "Read CGMES files into a scenario of an RDF graph database",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("file"), py::arg("scenario"),
-          py::arg("version"), py::arg("timestep"), py::arg("parameters"), py::arg("report_node"));
+          py::arg("version"), py::arg("timestamp"), py::arg("modelling_authority"), py::arg("profiles"),
+          py::arg("has_pin"), py::arg("pin_version"), py::arg("pin_timestamp"), py::arg("pin_authority"),
+          py::arg("parameters"), py::arg("report_node"));
     m.def("load_cgmes_buffers_to_rdf_db", loadCgmesBuffersToRdfDbPython, "Read CGMES zip buffers into a scenario of an RDF graph database",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("buffers"), py::arg("scenario"),
-          py::arg("version"), py::arg("timestep"), py::arg("parameters"), py::arg("report_node"));
+          py::arg("version"), py::arg("timestamp"), py::arg("modelling_authority"), py::arg("profiles"),
+          py::arg("has_pin"), py::arg("pin_version"), py::arg("pin_timestamp"), py::arg("pin_authority"),
+          py::arg("parameters"), py::arg("report_node"));
     m.def("load_network_from_rdf_db", &pypowsybl::loadNetworkFromRdfDb, "Build a network from a scenario of an RDF graph database",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("version"),
-          py::arg("timestep"), py::arg("parameters"), py::arg("post_processors"), py::arg("report_node"),
-          py::arg("allow_variant_multi_thread_access"));
+          py::arg("exact"), py::arg("timestamp"), py::arg("modelling_authority"), py::arg("profiles"), py::arg("parameters"),
+          py::arg("post_processors"), py::arg("report_node"), py::arg("allow_variant_multi_thread_access"));
     m.def("update_network_from_rdf_db", &pypowsybl::updateNetworkFromRdfDb, "Bring a network to a snapshot of a scenario",
           py::call_guard<py::gil_scoped_release>(), py::arg("network"), py::arg("db"), py::arg("scenario"),
-          py::arg("version"), py::arg("timestep"), py::arg("subsets"), py::arg("options"), py::arg("parameters"),
-          py::arg("report_node"));
+          py::arg("version"), py::arg("exact"), py::arg("timestamp"), py::arg("modelling_authority"), py::arg("profiles"),
+          py::arg("options"), py::arg("parameters"), py::arg("report_node"));
     m.def("get_rdf_db_update_info", &pypowsybl::getRdfDbUpdateInfo, "Describe what an update of a network did",
           py::call_guard<py::gil_scoped_release>(), py::arg("outcome"));
     m.def("get_rdf_db_update_network", &pypowsybl::getRdfDbUpdateNetwork, "Get the replacement network of a full reload",
@@ -1259,21 +1266,28 @@ PYBIND11_MODULE(_pypowsybl, m) {
           py::call_guard<py::gil_scoped_release>(), py::arg("db"));
     m.def("get_rdf_db_snapshots", &pypowsybl::getRdfDbSnapshots, "Create a series array of the snapshots of a scenario",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"));
-    m.def("get_rdf_db_versions", &pypowsybl::getRdfDbVersions, "Create a series array of the version chain of one timestep",
-          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("timestep"));
-    m.def("get_rdf_db_timesteps", &pypowsybl::getRdfDbTimesteps, "Create a series array of the timesteps of a scenario",
+    m.def("get_rdf_db_versions", &pypowsybl::getRdfDbVersions, "Create a series array of the version chain of one timestamp",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("timestamp"),
+          py::arg("modelling_authority"));
+    m.def("get_rdf_db_timestamps", &pypowsybl::getRdfDbTimestamps, "Create a series array of the timestamps of one modelling authority of a scenario",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("modelling_authority"));
+    m.def("get_rdf_db_modelling_authorities", &pypowsybl::getRdfDbModellingAuthorities, "The modelling authorities a scenario holds a snapshot tree of",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"));
+    m.def("get_rdf_db_assembly", &pypowsybl::getRdfDbAssembly, "Create a series array of the snapshot of every modelling authority at one moment",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("timestamp"),
+          py::arg("version"));
     m.def("get_rdf_db_models", &pypowsybl::getRdfDbModels, "Create a series array of the stored models of a scenario",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"));
     m.def("is_rdf_db_versioned", &pypowsybl::isRdfDbVersioned, "Whether a scenario holds snapshots",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"));
     m.def("create_rdf_db_checkpoint", &pypowsybl::createRdfDbCheckpoint, "Materialise a snapshot as a full state",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("version"),
-          py::arg("timestep"));
+          py::arg("timestamp"), py::arg("modelling_authority"));
     m.def("export_network_events_to_rdf_db", &pypowsybl::exportNetworkEventsToRdfDb,
           "Store recorded changes as a new snapshot of a scenario", py::call_guard<py::gil_scoped_release>(),
-          py::arg("recorder"), py::arg("db"), py::arg("scenario"), py::arg("version"), py::arg("timestep"),
-          py::arg("options"));
+          py::arg("recorder"), py::arg("db"), py::arg("scenario"), py::arg("version"), py::arg("timestamp"),
+          py::arg("modelling_authority"), py::arg("profiles"), py::arg("has_pin"), py::arg("pin_version"),
+          py::arg("pin_timestamp"), py::arg("pin_authority"), py::arg("options"));
     m.def("get_network_rdf_db_identity", &pypowsybl::getNetworkRdfDbIdentity,
           "Where a network, or one of its variants, stands in an RDF database",
           py::call_guard<py::gil_scoped_release>(),
@@ -1281,8 +1295,8 @@ PYBIND11_MODULE(_pypowsybl, m) {
     m.def("load_network_variants_from_rdf_db", &pypowsybl::loadNetworkVariantsFromRdfDb,
           "Load many snapshots of a scenario as the variants of one network",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("variant_ids"),
-          py::arg("versions"), py::arg("timesteps"), py::arg("parameters"), py::arg("report_node"),
-          py::arg("allow_variant_multi_thread_access"));
+          py::arg("versions"), py::arg("exact"), py::arg("timestamps"), py::arg("modelling_authorities"), py::arg("profiles"),
+          py::arg("parameters"), py::arg("report_node"), py::arg("allow_variant_multi_thread_access"));
     // The GIL is released here as in every other call of this module: this one takes the provenance lock of the
     // network in Java, and a variant operation on another thread holds that lock while it logs - and logging back
     // into Python needs the GIL. Holding both in opposite orders deadlocks the process.
@@ -1293,6 +1307,35 @@ PYBIND11_MODULE(_pypowsybl, m) {
           "Store the recorded changes of every variant as the successor of its own snapshot",
           py::call_guard<py::gil_scoped_release>(), py::arg("recorder"), py::arg("db"), py::arg("scenario"),
           py::arg("version"), py::arg("options"));
+    m.def("get_rdf_db_registry", &pypowsybl::getRdfDbRegistry, "Create a series array of the version registry of a scenario",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"));
+    m.def("edit_rdf_db_registry", &pypowsybl::editRdfDbRegistry, "Run one operation on the version registry of a scenario",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("op"), py::arg("name"),
+          py::arg("other"), py::arg("names"), py::arg("ranks"), py::arg("flag"));
+    m.def("get_rdf_db_profiles", &pypowsybl::getRdfDbProfiles, "The profiles a snapshot stores as one whole graph, with that graph",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("version"),
+          py::arg("exact"), py::arg("timestamp"), py::arg("modelling_authority"));
+    m.def("fetch_rdf_db_graph", &pypowsybl::fetchRdfDbGraph, "Create a series array of the statements of one stored graph",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("graph"));
+    m.def("rollover_rdf_db_snapshot", &pypowsybl::rolloverRdfDbSnapshot, "Flag a snapshot as a rollover and checkpoint it",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("version"),
+          py::arg("exact"), py::arg("timestamp"), py::arg("modelling_authority"));
+    m.def("drop_rdf_db_timestamp", &pypowsybl::dropRdfDbTimestamp, "Drop one timestamp of a tree",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("timestamp"),
+          py::arg("modelling_authority"));
+    m.def("get_rdf_db_changes_between", &pypowsybl::getRdfDbChangesBetween, "Create a series array of the changes between two snapshots",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("modelling_authority"),
+          py::arg("from_version"), py::arg("from_timestamp"), py::arg("to_version"), py::arg("to_timestamp"));
+    m.def("set_rdf_db_archive_cutoff", &pypowsybl::setRdfDbArchiveCutoff, "Set or clear the archive cutoff of a scenario",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("cutoff"),
+          py::arg("location"));
+    m.def("get_rdf_db_archive_cutoff", &pypowsybl::getRdfDbArchiveCutoff, "The archive cutoff of a scenario",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"));
+    m.def("load_composed_network_from_rdf_db", &pypowsybl::loadComposedNetworkFromRdfDb,
+          "Load the trees of several modelling authorities at one moment as one network",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("version"),
+          py::arg("exact"), py::arg("timestamp"), py::arg("authorities"), py::arg("owned"), py::arg("profiles"),
+          py::arg("parameters"), py::arg("report_node"), py::arg("allow_variant_multi_thread_access"));
     m.def("create_glsk_document", &pypowsybl::createGLSKdocument, "Create a glsk importer.", py::arg("filename"));
 
     m.def("get_glsk_injection_keys", &pypowsybl::getGLSKinjectionkeys, "Get glsk injection keys available for a country", py::arg("network"), py::arg("importer"), py::arg("country"), py::arg("instant"));
@@ -1662,7 +1705,10 @@ pypowsybl::JavaHandle loadNetworkFromBinaryBuffersPython(std::vector<py::buffer>
 }
 
 std::vector<std::string> loadCgmesBuffersToRdfDbPython(const pypowsybl::JavaHandle& db, std::vector<py::buffer> byteBuffers,
-                                                       const std::string& scenario, const std::string& version, const std::string& timestep,
+                                                       const std::string& scenario, const std::string& version, const std::string& timestamp,
+                                                       const std::string& modellingAuthority, const std::vector<std::string>& profiles,
+                                                       bool hasPin, const std::string& pinVersion, const std::string& pinTimestamp,
+                                                       const std::string& pinAuthority,
                                                        const std::map<std::string, std::string>& parameters, pypowsybl::JavaHandle* reportNode) {
     char** dataPtrs = new char*[byteBuffers.size()];
     int* dataSizes = new int[byteBuffers.size()];
@@ -1673,7 +1719,9 @@ std::vector<std::string> loadCgmesBuffersToRdfDbPython(const pypowsybl::JavaHand
     }
     try {
         std::vector<std::string> graphs = pypowsybl::loadCgmesBuffersToRdfDb(db, dataPtrs, dataSizes, byteBuffers.size(),
-                                                                             scenario, version, timestep, parameters, reportNode);
+                                                                             scenario, version, timestamp, modellingAuthority,
+                                                                             profiles, hasPin, pinVersion, pinTimestamp,
+                                                                             pinAuthority, parameters, reportNode);
         delete[] dataPtrs;
         delete[] dataSizes;
         return graphs;

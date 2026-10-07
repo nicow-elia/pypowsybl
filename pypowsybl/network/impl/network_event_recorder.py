@@ -34,7 +34,8 @@ from pandas import DataFrame
 import pypowsybl._pypowsybl as _pp
 from pypowsybl.utils import create_data_frame_from_series_array, path_to_str
 
-from .rdf_db import Timestep, _check_scenario, _check_variant, _timestep_to_str, _version_to_str
+from .rdf_db import (SnapshotAddress, _authority_to_str, _check_scenario, _check_variant, _pin_to_args,
+                     _profiles_to_list, _timestamp_to_str, _typed, _version_to_str)
 
 if TYPE_CHECKING:
     from .network import Network
@@ -320,36 +321,52 @@ class NetworkEventRecorder:
         return None
 
     def to_rdf_updates(self, db: 'RdfDatabase', scenario: str, version: Optional[str] = None,
-                       timestep: 'Timestep' = None, *, variant: Optional[str] = None, per_variant: bool = False,
-                       unsupported: str = 'raise', granularity: str = 'full_object', clear: bool = True,
-                       **metadata: ProfileValue) -> Union[List[str], DataFrame]:
+                       timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
+                       profiles: Optional[Sequence[str]] = None, *, variant: Optional[str] = None,
+                       per_variant: bool = False, pin: Optional[Union[datetime.datetime, SnapshotAddress]] = None,
+                       unsupported: str = 'raise', granularity: str = 'full_object',
+                       clear: bool = True, **metadata: ProfileValue) -> Union[List[str], DataFrame]:
         """
         Store the recorded changes straight into an RDF database, as a new snapshot of a scenario.
 
         One difference model per touched profile is written and tied together into the snapshot
-        ``(scenario, timestep, version)``; the changes travel as triples and are never re-parsed. The network must
-        be *in* ``scenario`` and at the head of the chain the write extends. See *Versions and timesteps* and
-        *Exporting a variant* in the user guide *Loading CGMES through an RDF database*.
+        ``(scenario, version, timestamp, modelling_authority)``; the changes travel as triples and are never
+        re-parsed. The network must be *in* ``scenario`` and at the head of the chain the write extends. See
+        *Versions and timestamps* and *Exporting a variant* in the user guide *Loading CGMES through an RDF
+        database*.
 
         Args:
             db: an open connection, see :func:`pypowsybl.network.connect_rdf_db`
             scenario: the base scenario the difference is made against, for instance ``"2021-02-09"``; required
-            version: the version label of the new snapshot, for instance ``'1.1'``; ``None`` takes the next label
-                of that timestep's chain
-            timestep: the moment the new snapshot describes, see :data:`pypowsybl.network.Timestep`; ``None`` is
-                the base timestep of the scenario
+            version: the version name of the new snapshot; it must rank above the head's in the scenario's version
+                registry (a permissive registry appends a name it does not hold, a strict one refuses it). ``None``
+                takes the lowest registered name ranking above the head (in a permissive registry without one, the
+                next number it lacks)
+            timestamp: the moment the new snapshot describes, a timezone-aware :class:`datetime.datetime`;
+                ``None`` is the base timestamp
+            modelling_authority: the tree to write into; ``None`` for the only tree of the scenario, or - when it
+                holds several - the one of the snapshot the network is at
+            profiles: the CGMES profiles the difference may write, see :data:`pypowsybl.network.PROFILES` (a
+                custom profile is refused: recorded changes only touch the conversion's nine);
+                ``None`` for every profile a change touches. A change of another profile is an unsupported change,
+                handled as ``unsupported`` says
             variant: write the changes recorded on **one variant** as the successor of *that variant's* snapshot.
-                The timestep is then the variant's own and must not be given; ``version`` still names the label
-                the new snapshot gets. A change IIDM does not store per variant belongs to every variant and is
+                The timestamp and the modelling authority are then the variant's own and must not be given;
+                ``version`` still names the version the new snapshot gets. A change IIDM does not store per variant belongs to every variant and is
                 therefore unsupported when the network holds more than one. Naming a variant here switches the
                 network into **variant mode**, exactly as
                 :meth:`Network.update_from_rdf_db` with ``variant=`` does, and that is sticky: every later
                 operation of this module on that network is a variant operation
             per_variant: write the changes of **every** variant they were recorded on, each as the successor of
-                its own snapshot, and answer with a dataframe instead of a list. ``timestep`` and ``variant`` must
-                then be ``None``. Everything that can refuse happens before anything is written, so an unsupported
+                its own snapshot, and answer with a dataframe instead of a list. ``timestamp``,
+                ``modelling_authority``, ``profiles`` and ``variant`` must then be ``None``. Everything that can refuse happens before anything is written, so an unsupported
                 change under ``unsupported='raise'`` leaves the database untouched. It switches the network into
                 variant mode like ``variant=``
+            pin: the snapshot a **new** timestamp hangs off - a timestamp (its newest version) or a
+                ``(version, timestamp, modelling_authority)`` triple of the same tree, stating what the changes
+                supersede. ``None`` is the snapshot the network is at, when it is of another timestamp of the tree
+                and states what the changes supersede, else the deepest snapshot that does. Refused for an existing
+                timestamp, with ``variant``/``per_variant`` and on a composed network
             unsupported: as in :meth:`to_ssh`
             granularity: as in :meth:`to_cgmes_diff`
             clear: drop the recorded events after a successful write (the default), so that the next
@@ -361,45 +378,56 @@ class NetworkEventRecorder:
 
         Returns:
             the ids of the stored models, in the order ``EQ``, ``SSH``. With ``per_variant=True`` a dataframe
-            indexed by ``variant`` with the columns ``snapshot``, ``version``, ``timestep``, ``models``
-            (``;``-joined ids), ``exported_events`` (int) and ``rejected``
+            indexed by ``variant`` with the columns ``snapshot``, ``modelling_authority``, ``timestamp``
+            (``datetime64[ns, UTC]``), ``version`` (the name, ``None`` when nothing was written), ``rank``
+            (nullable ``Int64``), ``models`` (``;``-joined ids),
+            ``exported_events`` (int) and ``rejected``
 
         Raises:
             pypowsybl.PyPowsyblError: nothing was recorded, the network belongs to another scenario, the network is
                 not at the head the write applies on, the address is already taken, a variant stands for no
                 snapshot, or a metadata name the database decides was given
-            ValueError: a bad ``unsupported`` or ``granularity`` value, or ``per_variant`` combined with a
-                ``timestep`` or a ``variant``
+            TypeError: a naive ``timestamp``, or a ``version`` that is not a str
+            ValueError: a bad ``unsupported`` or ``granularity`` value, an unknown profile, or ``per_variant``
+                combined with a ``timestamp``, a ``modelling_authority``, ``profiles`` or a ``variant``
 
         Examples:
             .. code-block:: python
 
                 with pp.network.connect('memory:demo') as db:
-                    network = pp.network.from_rdf_db(db, '2021-02-09', '1.0')
+                    network = pp.network.from_rdf_db(db, '2021-02-09', '1')
                     with network.event_recorder() as recorder:
                         network.update_loads(id='LOAD', p0=420.0)
-                        ids = recorder.to_rdf_updates(db, '2021-02-09', '1.1', '8:30')
+                        ids = recorder.to_rdf_updates(db, '2021-02-09', '1',
+                                                      datetime(2021, 2, 9, 8, 30, tzinfo=timezone.utc))
         """
         self._check_network()
         _check_scenario(scenario)
-        if per_variant and (timestep is not None or variant is not None):
-            raise ValueError('per_variant=True writes every variant the changes were recorded on, each at its own '
-                             'timestep; it takes neither a timestep nor a variant')
+        if pin is not None and (per_variant or variant is not None):
+            raise ValueError('a variant export writes the successor of the variant\'s own snapshot, so it takes no '
+                             'pin')
+        if per_variant and (timestamp is not None or modelling_authority is not None or profiles is not None
+                            or variant is not None):
+            raise ValueError('per_variant=True writes every variant the changes were recorded on, each as the '
+                             'successor of its own snapshot; it takes neither a timestamp, a modelling authority, '
+                             'profiles nor a variant')
         if per_variant:
             options = self._flatten_options(unsupported, granularity, metadata, None)
-            rows = create_data_frame_from_series_array(_pp.export_network_events_to_rdf_db_per_variant(
+            rows = _typed(create_data_frame_from_series_array(_pp.export_network_events_to_rdf_db_per_variant(
                 self._handle, db._check_open(), scenario,  # pylint: disable=protected-access
-                _version_to_str(version), options))
+                _version_to_str(version), options)))
             if clear:
                 self.clear()
             return rows
-        if variant is not None and timestep is not None:
+        if variant is not None and (timestamp is not None or modelling_authority is not None):
             raise ValueError('a variant export writes the successor of the snapshot that variant stands for, so '
-                             'its timestep is that variant\'s own; drop the timestep')
+                             'its timestamp and modelling authority are that variant\'s own; drop them')
         options = self._flatten_options(unsupported, granularity, metadata, variant)
+        has_pin, pin_version, pin_timestamp, pin_authority = _pin_to_args(pin)
         ids = _pp.export_network_events_to_rdf_db(
             self._handle, db._check_open(), scenario,  # pylint: disable=protected-access
-            _version_to_str(version), _timestep_to_str(timestep), options)
+            _version_to_str(version), _timestamp_to_str(timestamp), _authority_to_str(modelling_authority),
+            _profiles_to_list(profiles), has_pin, pin_version, pin_timestamp, pin_authority, options)
         if clear:
             self.clear()
         return ids

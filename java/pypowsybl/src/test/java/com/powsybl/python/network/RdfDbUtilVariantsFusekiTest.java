@@ -16,15 +16,21 @@ import java.util.Map;
 import java.util.UUID;
 
 import static com.powsybl.python.network.RdfDbTestSupport.totalLoad;
-import static com.powsybl.python.network.RdfDbUtilTest.importParameters;
-import static com.powsybl.python.network.RdfDbUtilVersionedTest.timestepFiles;
+import static com.powsybl.python.network.RdfDbUtilVariantsTest.loadVariants;
+import static com.powsybl.python.network.RdfDbUtilVersionedTest.T0815;
+import static com.powsybl.python.network.RdfDbUtilVersionedTest.T0830;
+import static com.powsybl.python.network.RdfDbUtilVersionedTest.T0845;
+import static com.powsybl.python.network.RdfDbUtilVersionedTest.ingest;
+import static com.powsybl.python.network.RdfDbUtilVersionedTest.load;
+import static com.powsybl.python.network.RdfDbUtilVersionedTest.timestampFiles;
+import static com.powsybl.python.network.RdfDbUtilVersionedTest.update;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 /**
  * The variant bindings of {@link RdfDbUtilVariantsTest}, against a real SPARQL server over HTTP.
  *
- * <p>A bulk load is one multi-side chain query and one statement fetch whatever the number of timesteps, and a
+ * <p>A bulk load is one multi-side chain query and one statement fetch whatever the number of timestamps, and a
  * per-variant export is a guarded write per variant. Neither can be proved by the in-process backend: the query
  * results and the guards travel through the rdf4j protocol parsers, which are service-loader lookups.</p>
  *
@@ -38,15 +44,12 @@ class RdfDbUtilVariantsFusekiTest extends AbstractFusekiTest {
         return "2014-06-01-" + suffix + "-" + UUID.randomUUID().toString().substring(0, 8);
     }
 
-    /** A root plus three steady-state timesteps, ingested from files as a TSO's day arrives. */
+    /** A root plus three steady-state timestamps, ingested from files as a TSO's day arrives. */
     private static void aDay(RdfDbConnection db, String scenario) {
-        RdfDbUtil.loadCgmes(db, RdfDbUtilTest.microGridBe(), scenario, "1.0", null, importParameters(), null);
-        RdfDbUtil.loadCgmes(db, timestepFiles("f0815", 1.1, "2014-06-01T08:15:00Z", false), scenario, "1.1",
-                "8:15", importParameters(), null);
-        RdfDbUtil.loadCgmes(db, timestepFiles("f0830", 1.2, "2014-06-01T08:30:00Z", false), scenario, "1.1",
-                "8:30", importParameters(), null);
-        RdfDbUtil.loadCgmes(db, timestepFiles("f0845", 1.3, "2014-06-01T08:45:00Z", false), scenario, "1.1",
-                "8:45", importParameters(), null);
+        ingest(db, scenario, RdfDbUtilTest.microGridBe(), 1, null);
+        ingest(db, scenario, timestampFiles("f0815", 1.1, T0815, false), 1, T0815);
+        ingest(db, scenario, timestampFiles("f0830", 1.2, T0830, false), 1, T0830);
+        ingest(db, scenario, timestampFiles("f0845", 1.3, T0845, false), 1, T0845);
     }
 
     @Test
@@ -54,15 +57,14 @@ class RdfDbUtilVariantsFusekiTest extends AbstractFusekiTest {
         String scenario = scenario("variants");
         try (RdfDbConnection db = RdfDbUtil.open(datasetUrl(), Map.of())) {
             aDay(db, scenario);
-            Network day = RdfDbUtil.loadVariants(db, scenario, List.of("", "", ""), List.of("", "", ""),
-                    List.of("8:15", "8:30", "8:45"), importParameters(), null, false);
+            Network day = loadVariants(db, scenario, List.of("", "", ""), List.of(T0815, T0830, T0845));
 
             assertThat(day.getVariantManager().getVariantIds())
-                    .containsExactlyInAnyOrder("InitialState", "08:15", "08:30", "08:45");
-            for (String label : List.of("8:15", "8:30", "8:45")) {
-                Network alone = RdfDbUtil.load(db, scenario, "1.1", label, importParameters(), List.of(), null);
+                    .containsExactlyInAnyOrder("InitialState", T0815, T0830, T0845);
+            for (String timestamp : List.of(T0815, T0830, T0845)) {
+                Network alone = load(db, scenario, 1, timestamp);
                 assertEquals(alone.getLoadStream().mapToDouble(load -> load.getP0()).sum(),
-                        totalLoad(day, "0" + label), 1e-6);
+                        totalLoad(day, timestamp), 1e-6);
             }
             assertThat(RdfDbUtil.variantRows(day))
                     .filteredOn(row -> "bound".equals(row.status()))
@@ -76,28 +78,25 @@ class RdfDbUtilVariantsFusekiTest extends AbstractFusekiTest {
         String scenario = scenario("export");
         try (RdfDbConnection db = RdfDbUtil.open(datasetUrl(), Map.of())) {
             aDay(db, scenario);
-            Network day = RdfDbUtil.loadVariants(db, scenario, List.of("", ""), List.of("", ""),
-                    List.of("8:15", "8:45"), importParameters(), null, false);
+            Network day = loadVariants(db, scenario, List.of("", ""), List.of(T0815, T0845));
 
             NetworkEventRecording recording = new NetworkEventRecording(day);
             recording.start();
-            day.getVariantManager().setWorkingVariant("08:15");
+            day.getVariantManager().setWorkingVariant(T0815);
             day.getLoads().iterator().next().setP0(11.0);
-            day.getVariantManager().setWorkingVariant("08:45");
+            day.getVariantManager().setWorkingVariant(T0845);
             day.getLoads().iterator().next().setP0(99.0);
             day.getVariantManager().setWorkingVariant("InitialState");
             recording.stop();
 
             List<RdfDbUtil.VariantExportRow> rows =
-                    RdfDbUtil.exportRecordingPerVariant(recording, db, scenario, "2.0", Map.of());
+                    RdfDbUtil.exportRecordingPerVariant(recording, db, scenario, "2", Map.of());
             assertThat(rows).hasSize(2).allMatch(row -> !row.models().isEmpty());
 
             // a second connection, i.e. what another process sees
             try (RdfDbConnection reader = RdfDbUtil.open(datasetUrl(), Map.of())) {
-                Network early = RdfDbUtil.load(reader, scenario, "2.0", "8:15", importParameters(), List.of(),
-                        null);
-                Network late = RdfDbUtil.load(reader, scenario, "2.0", "8:45", importParameters(), List.of(),
-                        null);
+                Network early = load(reader, scenario, 2, T0815);
+                Network late = load(reader, scenario, 2, T0845);
                 assertEquals(11.0, early.getLoads().iterator().next().getP0(), 1e-9);
                 assertEquals(99.0, late.getLoads().iterator().next().getP0(), 1e-9);
             }
@@ -109,18 +108,18 @@ class RdfDbUtilVariantsFusekiTest extends AbstractFusekiTest {
         String scenario = scenario("update");
         try (RdfDbConnection db = RdfDbUtil.open(datasetUrl(), Map.of())) {
             aDay(db, scenario);
-            Network network = RdfDbUtil.load(db, scenario, "1.0", null, importParameters(), List.of(), null);
+            Network network = load(db, scenario, 1, null);
             double base = network.getLoadStream().mapToDouble(load -> load.getP0()).sum();
 
-            RdfDbUtil.UpdateOutcome created = RdfDbUtil.update(network, db, scenario, "1.1", "8:30", List.of(),
-                    Map.of(RdfDbUtil.VARIANT, "study"), importParameters(), null);
+            RdfDbUtil.UpdateOutcome created = update(network, db, scenario, 1, T0830,
+                    Map.of(RdfDbUtil.VARIANT, "study"));
             assertEquals("diff", RdfDbUtil.updateInfo(created).get(RdfDbUtil.ROUTE));
             assertEquals("study", RdfDbUtil.updateInfo(created).get(RdfDbUtil.VARIANT));
             assertEquals(base * 1.2, totalLoad(network, "study"), 1e-6);
             assertEquals(base, network.getLoadStream().mapToDouble(load -> load.getP0()).sum(), 1e-6);
 
             Map<String, String> identity = RdfDbUtil.identity(network, db, scenario, "study");
-            assertEquals("2014-06-01T08:30:00Z", identity.get(RdfDbUtil.TIMESTEP));
+            assertEquals("2014-06-01T08:30:00Z", identity.get(RdfDbUtil.TIMESTAMP));
         }
     }
 }

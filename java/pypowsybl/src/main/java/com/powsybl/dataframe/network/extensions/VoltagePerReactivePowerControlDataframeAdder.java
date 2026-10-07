@@ -10,18 +10,21 @@ package com.powsybl.dataframe.network.extensions;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.dataframe.SeriesMetadata;
 import com.powsybl.dataframe.network.adders.AbstractSimpleAdder;
-import com.powsybl.dataframe.network.adders.SeriesUtils;
 import com.powsybl.dataframe.update.DoubleSeries;
 import com.powsybl.dataframe.update.StringSeries;
 import com.powsybl.dataframe.update.UpdatingDataframe;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.StaticVarCompensator;
-import com.powsybl.iidm.network.extensions.VoltagePerReactivePowerControlAdder;
+import com.powsybl.iidm.network.regulation.RegulationMode;
+import com.powsybl.iidm.network.regulation.VoltageRegulation;
 
 import java.util.Collections;
 import java.util.List;
 
 /**
+ * Creates the former {@code voltagePerReactivePowerControl} extension as a slope of the voltage regulation, see
+ * {@link VoltagePerReactivePowerControlDataframeProvider}.
+ *
  * @author Hugo Kulesza {@literal <hugo.kulesza at rte-france.com>}
  */
 public class VoltagePerReactivePowerControlDataframeAdder extends AbstractSimpleAdder {
@@ -51,9 +54,18 @@ public class VoltagePerReactivePowerControlDataframeAdder extends AbstractSimple
             if (svc == null) {
                 throw new PowsyblException("Invalid static var compensator id : could not find " + id);
             }
-            VoltagePerReactivePowerControlAdder adder = svc.newExtension(VoltagePerReactivePowerControlAdder.class);
-            SeriesUtils.applyIfPresent(slope, row, adder::withSlope);
-            adder.add();
+            VoltageRegulation regulation = svc.getVoltageRegulation();
+            if (regulation == null) {
+                throw new PowsyblException("Static var compensator '" + id + "' has no voltage regulation");
+            }
+            double value = slope != null ? slope.get(row) : Double.NaN;
+            if (Double.isNaN(value)) {
+                throw new PowsyblException("Undefined value for slope");
+            }
+            if (value < 0) {
+                throw new PowsyblException("Slope value of SVC " + id + " must be positive: " + value);
+            }
+            regulation.setSlope(value).setMode(RegulationMode.VOLTAGE_PER_REACTIVE_POWER);
         }
     }
 

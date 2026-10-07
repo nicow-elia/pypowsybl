@@ -16,11 +16,13 @@ from .impl.network_event_recorder import NetworkEventRecorder
 from .impl.rdf_db import (
     RdfDatabase,
     RdfDbVariantRefusedError,
+    VersionRegistry,
     connect_rdf_db,
     connect,
     from_rdf_db,
-    Timestep,
-    VariantAddress,
+    Profile,
+    PROFILES,
+    SnapshotAddress,
 )
 from .impl.node_breaker_topology import NodeBreakerTopology
 from .impl.sld_parameters import SldParameters

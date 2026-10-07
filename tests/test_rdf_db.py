@@ -176,7 +176,7 @@ def test_a_steady_state_from_the_database_updates_a_network(rdf_db_url: str, sce
         db.load_cgmes_from_binary_buffers([modified_ssh()], scenario2, parameters=PARAMS)
         assert db.graphs(scenario2)['subset'].tolist() == ['SSH']
 
-        route = network.update_from_rdf_db(db, scenario2, subsets=['SSH'], parameters=PARAMS)
+        route = network.update_from_rdf_db(db, scenario2, profiles=['SSH'], parameters=PARAMS)
         assert route == 'update'
         assert network.get_loads().loc[load_id]['p0'] == pytest.approx(before + 123.0)
 
@@ -197,12 +197,12 @@ def test_an_empty_scenario_is_an_error_that_says_which_scenarios_exist(rdf_db_ur
             pp.network.from_rdf_db(db, 'not-a-day', parameters=PARAMS)
 
 
-def test_an_unknown_subset_is_refused_with_the_known_ones(rdf_db_url: str, scenario: str) -> None:
+def test_a_malformed_profile_is_refused_with_the_known_ones(rdf_db_url: str, scenario: str) -> None:
     network = load_from_files()
     with pp.network.connect(rdf_db_url) as db:
         db.load_cgmes(CGMES_ZIP, scenario, parameters=PARAMS)
-        with pytest.raises(PyPowsyblError, match='Unknown CGMES subset'):
-            network.update_from_rdf_db(db, scenario, subsets=['NOPE'])
+        with pytest.raises(ValueError, match="'no pe' is not a profile name.*'SSH'"):
+            network.update_from_rdf_db(db, scenario, profiles=['no pe'])
 
 
 def test_the_connection_is_a_context_manager_and_closes_once() -> None:

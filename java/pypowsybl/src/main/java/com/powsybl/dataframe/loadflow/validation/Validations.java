@@ -12,6 +12,7 @@ import com.powsybl.dataframe.DataframeMapperBuilder;
 import com.powsybl.iidm.network.ThreeSides;
 
 import java.util.List;
+import java.util.Objects;
 import java.util.function.Function;
 
 /**
@@ -122,7 +123,8 @@ public final class Validations {
                 .doubles("reactive_power_setpoint", SvcValidationData::getReactivePowerSetpoint)
                 .doubles("voltage_setpoint", SvcValidationData::getVoltageSetpoint)
                 .booleans("connected", SvcValidationData::isConnected)
-                .strings("mode", data -> data.getRegulationMode().name())
+                // core 7.5: no mode for a compensator without voltage regulation
+                .strings("mode", data -> Objects.toString(data.getRegulationMode(), ""))
                 .booleans("regulating", SvcValidationData::isRegulating)
                 .doubles("b_min", SvcValidationData::getbMin)
                 .doubles("b_max", SvcValidationData::getbMax)

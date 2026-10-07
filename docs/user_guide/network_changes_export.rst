@@ -270,7 +270,13 @@ Everything else is *unsupported*: creating or removing elements, adding or remov
 duration, selecting another limit set, changing equipment attributes such as ``max_p`` or a transformer impedance,
 connecting or disconnecting a terminal, and the state values ``p``, ``q``, ``v`` and ``angle`` — which is why
 **running a load flow inside the recorded block** produces unsupported changes, since a load flow writes its results
-through the ordinary setters.
+through the ordinary setters. Regulation changes CGMES has no place for are unsupported as well: the regulation
+mode or regulating terminal of a generator, shunt, static var compensator or ratio tap changer (equipment data).
+A VSC converter station moves both ways: ``voltage_regulator_on=False`` makes it follow ``target_q`` (a reactive
+power regulation at its own terminal, ``qPccControl`` ``reactivePcc``) and ``True`` makes it follow ``target_v``;
+both are exported, as are its targets. A CGMES ``VsConverter`` has no control flag, so a station that stops
+regulating without that move is unsupported: one regulating a remote terminal, or switched off while the network has
+several variants (no regulating terminal can be set then).
 
 The ``unsupported`` argument decides what happens then. ``'raise'``, the default, refuses to write anything and
 names the change; ``'ignore'`` skips it and logs a warning:

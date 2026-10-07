@@ -19,6 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 
+import static com.powsybl.python.network.RdfDbUtilVersionedTest.T0830;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -44,19 +45,18 @@ class RdfDbUtilVersionedFusekiTest extends AbstractFusekiTest {
     }
 
     private static Network root(RdfDbConnection db, String scenario) {
-        assertThat(RdfDbUtil.loadCgmes(db, RdfDbUtilTest.microGridBe(), scenario, "1.0", null,
-                RdfDbUtilTest.importParameters(), null)).isNotEmpty();
-        return RdfDbUtil.load(db, scenario, "1.0", null, RdfDbUtilTest.importParameters(), List.of(), null);
+        assertThat(RdfDbUtilVersionedTest.ingest(db, scenario, RdfDbUtilTest.microGridBe(), 1, null)).isNotEmpty();
+        return RdfDbUtilVersionedTest.load(db, scenario, 1, null);
     }
 
-    private static List<String> record(RdfDbConnection db, Network network, String scenario, String version,
-                                       String timestep, double value) {
+    private static List<String> record(RdfDbConnection db, Network network, String scenario, Integer version,
+                                       String timestamp, double value) {
         NetworkEventRecording recording = new NetworkEventRecording(network);
         recording.start();
         Load load = network.getLoads().iterator().next();
         load.setP0(value);
         recording.stop();
-        return RdfDbUtil.exportRecording(recording, db, scenario, version, timestep, Map.of());
+        return RdfDbUtilVersionedTest.export(recording, db, scenario, version, timestamp, Map.of());
     }
 
     @Test
@@ -65,23 +65,21 @@ class RdfDbUtilVersionedFusekiTest extends AbstractFusekiTest {
         try (RdfDbConnection db = RdfDbUtil.open(datasetUrl(), Map.of())) {
             Network sender = root(db, scenario);
             assertTrue(RdfDbUtil.isVersioned(db, scenario));
-            assertThat(record(db, sender, scenario, "1.1", "8:30", 47.0)).isNotEmpty();
+            assertThat(record(db, sender, scenario, 1, T0830, 47.0)).isNotEmpty();
 
             List<SnapshotInfo> snapshots = RdfDbUtil.snapshots(db, scenario);
             assertEquals(2, snapshots.size());
             assertThat(snapshots).anyMatch(info -> info.kind() == SnapshotInfo.Kind.DIFF && info.fast());
-            assertEquals(2, RdfDbUtil.timesteps(db, scenario).size());
+            assertEquals(2, RdfDbUtil.timestamps(db, scenario, null).size());
 
-            Network receiver = RdfDbUtil.load(db, scenario, "1.0", null, RdfDbUtilTest.importParameters(),
-                    List.of(), null);
-            RdfDbUtil.UpdateOutcome outcome = RdfDbUtil.update(receiver, db, scenario, "1.1", "8:30", List.of(),
-                    Map.of(), RdfDbUtilTest.importParameters(), null);
+            Network receiver = RdfDbUtilVersionedTest.load(db, scenario, 1, null);
+            RdfDbUtil.UpdateOutcome outcome = RdfDbUtilVersionedTest.update(receiver, db, scenario, 1, T0830,
+                    Map.of());
             assertEquals("diff", RdfDbUtil.updateInfo(outcome).get(RdfDbUtil.ROUTE));
             assertEquals(47.0, receiver.getLoads().iterator().next().getP0(), 1e-9);
 
             // And the snapshot really is addressable on its own, not only reachable by walking
-            Network direct = RdfDbUtil.load(db, scenario, "1.1", "8:30", RdfDbUtilTest.importParameters(),
-                    List.of(), null);
+            Network direct = RdfDbUtilVersionedTest.load(db, scenario, 1, T0830);
             assertEquals(47.0, direct.getLoads().iterator().next().getP0(), 1e-9);
         }
     }
@@ -91,12 +89,12 @@ class RdfDbUtilVersionedFusekiTest extends AbstractFusekiTest {
         String scenario = scenario("guard");
         try (RdfDbConnection db = RdfDbUtil.open(datasetUrl(), Map.of())) {
             Network first = root(db, scenario);
-            Network second = RdfDbUtil.load(db, scenario, "1.0", null, RdfDbUtilTest.importParameters(),
-                    List.of(), null);
-            record(db, first, scenario, "1.1", null, 48.0);
+            Network second = RdfDbUtilVersionedTest.load(db, scenario, 1, null);
+            record(db, first, scenario, 2, null, 48.0);
 
-            // The second writer is still at 1.0; the guard of the write refuses it rather than forking the chain
-            assertThatThrownBy(() -> record(db, second, scenario, "1.2", null, 49.0))
+            // The second writer is still at version 1; the guard of the write refuses it rather than forking the
+            // chain, even with a version that would be the next one
+            assertThatThrownBy(() -> record(db, second, scenario, 3, null, 49.0))
                     .isInstanceOf(PowsyblException.class)
                     .hasMessageMatching("(?s).*(successor|re-record).*");
         }
@@ -107,22 +105,28 @@ class RdfDbUtilVersionedFusekiTest extends AbstractFusekiTest {
         String scenario = scenario("cross");
         String other = scenario("other");
         try (RdfDbConnection db = RdfDbUtil.open(datasetUrl(), Map.of())) {
-            RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.miniBusBranch().dataSource(), other, "1.0", null,
-                    RdfDbUtilTest.importParameters(), null);
+            RdfDbUtilVersionedTest.ingest(db, other, CgmesConformity1Catalog.miniBusBranch().dataSource(), 1, null);
             Network network = root(db, scenario);
-            record(db, network, scenario, "1.1", "8:30", 50.0);
+            record(db, network, scenario, 1, T0830, 50.0);
 
-            String iri = RdfDbUtil.checkpoint(db, scenario, "1.1", "8:30");
+            String iri = RdfDbUtil.checkpoint(db, scenario, "1", T0830, null);
             assertThat(RdfDbUtil.snapshots(db, scenario))
                     .filteredOn(info -> info.iri().equals(iri))
                     .allMatch(SnapshotInfo::hasFull);
 
-            RdfDbUtil.UpdateOutcome outcome = RdfDbUtil.update(network, db, other, "1.0", null, List.of(),
-                    Map.of(), RdfDbUtilTest.importParameters(), null);
+            RdfDbUtil.UpdateOutcome outcome = RdfDbUtilVersionedTest.update(network, db, other, 1, null, Map.of());
             Map<String, String> info = RdfDbUtil.updateInfo(outcome);
             assertEquals("full", info.get(RdfDbUtil.ROUTE));
             assertEquals(other, info.get(RdfDbUtil.SCENARIO));
             assertThat(RdfDbUtil.replacement(outcome)).isNotSameAs(network);
+        }
+    }
+
+    @Test
+    void anOpenAuthorityOfAWriteIsTheOnlyTreeOfTheScenarioOverHttp() {
+        try (RdfDbConnection db = RdfDbUtil.open(datasetUrl(), Map.of())) {
+            RdfDbUtilVersionedTest.anOpenAuthorityOfAWriteIsTheOnlyTreeOfTheScenario(db, scenario("open"),
+                    scenario("fresh"));
         }
     }
 }

@@ -28,11 +28,11 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -201,17 +201,24 @@ class RdfDbUtilTest {
     }
 
     /**
-     * A blank optional argument means "not given", and a timestep without a version addresses nothing.
+     * A blank optional argument means "not given". Any part of an address makes an upload a snapshot - a timestamp
+     * alone is the root, version 1 - and profiles without an address are refused, because they select what a
+     * snapshot stores.
      */
     @Test
-    void aTimestepWithoutAVersionIsRejected() {
+    void anyPartOfTheAddressMakesAnUploadASnapshot() {
         assertEquals(null, RdfDbUtil.blankToNull(""));
         assertEquals(null, RdfDbUtil.blankToNull(null));
-        assertEquals("8:30", RdfDbUtil.blankToNull("8:30"));
+        assertEquals("x", RdfDbUtil.blankToNull("x"));
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
-            assertThatThrownBy(() -> RdfDbUtil.loadCgmes(db, microGridBe(), SCENARIO, null, "8:30", Map.of(), null))
+            assertThatThrownBy(() -> RdfDbUtil.loadCgmes(db, microGridBe(), SCENARIO, null, null, null,
+                    List.of("SSH"), Map.of(), null))
                     .isInstanceOf(PowsyblException.class)
-                    .hasMessageContaining("a timestep addresses a snapshot, so it needs a version");
+                    .hasMessageContaining("stores no snapshot");
+            RdfDbUtil.loadCgmes(db, microGridBe(), SCENARIO, null, "2014-06-01T10:30:00Z", null, List.of(),
+                    importParameters(), null);
+            assertThat(RdfDbUtil.snapshots(db, SCENARIO)).singleElement()
+                    .satisfies(root -> assertEquals("1", root.version()));
         }
     }
 
@@ -228,14 +235,15 @@ class RdfDbUtilTest {
     }
 
     @Test
-    void subsetNamesAreTranslatedAndUnknownOnesAreNamedInTheError() {
-        assertEquals(EnumSet.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, CgmesSubset.STATE_VARIABLES),
-                RdfDbUtil.toSubsets(List.of("ssh", " SV ")));
-        assertEquals(EnumSet.of(CgmesSubset.EQUIPMENT_BOUNDARY), RdfDbUtil.toSubsets(List.of("EQ_BD")));
-        assertThatThrownBy(() -> RdfDbUtil.toSubsets(List.of("NOPE")))
+    void profilesAreNamesAndAMalformedOneIsNamedInTheError() {
+        assertEquals(Set.of("SSH", "SV"), RdfDbUtil.toProfiles(List.of("ssh", " SV ")));
+        assertEquals(Set.of("EQ_BD"), RdfDbUtil.toProfiles(List.of("EQ_BD")));
+        assertEquals(Set.of("EQ", "OP"), RdfDbUtil.toProfiles(List.of("EQ", "OP")), "a custom profile is a name too");
+        assertEquals(null, RdfDbUtil.toProfiles(List.of()), "none named is the default of the call");
+        assertThatThrownBy(() -> RdfDbUtil.toProfiles(List.of("O P")))
                 .isInstanceOf(RdfDbException.class)
-                .hasMessageContaining("Unknown CGMES subset 'NOPE'")
-                .hasMessageContaining("SSH");
+                .hasMessageContaining("'O P' is not a profile name")
+                .hasMessageContaining("[A-Z][A-Z0-9_]*");
     }
 
     @Test
