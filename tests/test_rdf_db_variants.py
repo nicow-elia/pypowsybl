@@ -58,7 +58,7 @@ TESTS_DIR = Path(__file__).parent
 
 def _a_day(db: pp.network.RdfDatabase, scenario: str, moments: Optional[List[datetime]] = None) -> None:
     """The base grid model as the root of a scenario, plus one steady-state timestamp per moment."""
-    db.load_cgmes(CGMES_ZIP, scenario, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
+    db.load_cgmes(CGMES_ZIP, scenario, '1', modelling_authority=AUTHORITY, parameters=PARAMS)
     for i, moment in enumerate(moments if moments is not None else MOMENTS, start=1):
         db.load_cgmes_from_binary_buffers([ssh_variant(i, moment, suffix=scenario)], scenario, None, moment,
                                           modelling_authority=AUTHORITY, parameters=PARAMS)
@@ -87,13 +87,13 @@ def test_a_day_as_variants_equals_a_load_per_timestamp(rdf_db_url: str, scenario
     """The headline claim: every variant is the network the same snapshot gives when it is loaded on its own."""
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
 
         assert sorted(day.get_variant_ids()) == [V2000, V2015, V2030, 'InitialState']
         assert day.get_working_variant_id() == 'InitialState', 'the caller is left on the primary variant'
 
         for moment, name in zip(MOMENTS, NAMES):
-            alone = pp.network.from_rdf_db(db, scenario, 1, moment, parameters=PARAMS)
+            alone = pp.network.from_rdf_db(db, scenario, '1', moment, parameters=PARAMS)
             pd.testing.assert_frame_equal(alone.get_loads()[['p0', 'q0']].sort_index(), _loads(day, name),
                                           check_exact=False, rtol=1e-9)
             # and nothing the difference does not carry moved either: this fixture rewrites EnergyConsumer.p
@@ -119,9 +119,9 @@ def test_the_default_names_of_a_day_are_its_instants(rdf_db_url: str, scenario: 
     other = 'http://tennet.nl/CGMES'
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes_from_binary_buffers([other_tso_zip('-' + scenario)], scenario, 1, None, other,
+        db.load_cgmes_from_binary_buffers([other_tso_zip('-' + scenario)], scenario, '1', None, other,
                                           parameters=PARAMS)
-        day = pp.network.from_rdf_db(db, scenario, 1, None, AUTHORITY, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', None, AUTHORITY, timestamps=MOMENTS, parameters=PARAMS)
         assert sorted(day.get_variant_ids()) == sorted(NAMES + ['InitialState'])
         assert {_binding(day)[name]['modelling_authority'] for name in NAMES} == {AUTHORITY}
 
@@ -130,10 +130,10 @@ def test_variants_are_isolated_from_each_other(rdf_db_url: str, scenario: str) -
     """Moving one variant to another snapshot leaves every other variant exactly where it was."""
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
         before = {name: _loads(day, name) for name in NAMES + ['InitialState']}
 
-        assert day.update_from_rdf_db(db, scenario, 1, T2030, variant=V2000) == 'diff'
+        assert day.update_from_rdf_db(db, scenario, '1', T2030, variant=V2000) == 'diff'
 
         pd.testing.assert_frame_equal(before[V2030], _loads(day, V2000), check_exact=False, rtol=1e-9)
         for name in [V2015, V2030, 'InitialState']:
@@ -144,21 +144,21 @@ def test_variants_mapping_names_them_and_mixes_versions(rdf_db_url: str, scenari
     """``variants={...}`` chooses the names, and an address of its own lets one variant sit at another version."""
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes_from_binary_buffers([ssh_variant(9, T2015, suffix=scenario)], scenario, 2, T2015,
+        db.load_cgmes_from_binary_buffers([ssh_variant(9, T2015, suffix=scenario)], scenario, '2', T2015,
                                           modelling_authority=AUTHORITY, parameters=PARAMS)
 
-        day = pp.network.from_rdf_db(db, scenario, 1,
-                                     variants={'early': T2000, 'study': (2, T2015, None)}, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1',
+                                     variants={'early': T2000, 'study': ('2', T2015, None)}, parameters=PARAMS)
         assert sorted(day.get_variant_ids()) == ['InitialState', 'early', 'study']
         binding = _binding(day)
-        assert binding['early']['version'] == 1
-        assert binding['study']['version'] == 2
+        assert binding['early']['version'] == '1'
+        assert binding['study']['version'] == '2'
         assert binding['early']['timestamp'] == T2000
         assert binding['study']['timestamp'] == T2015
         assert binding['study']['modelling_authority'] == AUTHORITY
         assert binding['early']['status'] == 'bound' and binding['study']['status'] == 'bound'
 
-        study_alone = pp.network.from_rdf_db(db, scenario, 2, T2015, parameters=PARAMS)
+        study_alone = pp.network.from_rdf_db(db, scenario, '2', T2015, parameters=PARAMS)
         pd.testing.assert_frame_equal(study_alone.get_loads()[['p0', 'q0']].sort_index(), _loads(day, 'study'),
                                       check_exact=False, rtol=1e-9)
 
@@ -166,23 +166,23 @@ def test_variants_mapping_names_them_and_mixes_versions(rdf_db_url: str, scenari
 def test_update_creates_or_moves_one_variant(rdf_db_url: str, scenario: str) -> None:
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        network = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
+        network = pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
         handle = network._handle  # pylint: disable=protected-access
         base = float(network.get_loads()['p0'].sum())
 
-        assert network.update_from_rdf_db(db, scenario, 1, T2000, variant='study') == 'diff'
+        assert network.update_from_rdf_db(db, scenario, '1', T2000, variant='study') == 'diff'
         assert sorted(network.get_variant_ids()) == ['InitialState', 'study']
         assert network.get_working_variant_id() == 'InitialState'
         assert float(network.get_loads()['p0'].sum()) == pytest.approx(base)
         assert _total_load(network, 'study') != pytest.approx(base)
 
         # the same variant again, at another timestamp: moved, not created a second time
-        assert network.update_from_rdf_db(db, scenario, 1, T2030, variant='study') == 'diff'
+        assert network.update_from_rdf_db(db, scenario, '1', T2030, variant='study') == 'diff'
         assert sorted(network.get_variant_ids()) == ['InitialState', 'study']
-        assert network.update_from_rdf_db(db, scenario, 1, T2030, variant='study') == 'noop'
+        assert network.update_from_rdf_db(db, scenario, '1', T2030, variant='study') == 'noop'
         assert network._handle is handle, 'a variant update never swaps the Java network'  # pylint: disable=protected-access
 
-        alone = pp.network.from_rdf_db(db, scenario, 1, T2030, parameters=PARAMS)
+        alone = pp.network.from_rdf_db(db, scenario, '1', T2030, parameters=PARAMS)
         pd.testing.assert_frame_equal(alone.get_loads()[['p0', 'q0']].sort_index(), _loads(network, 'study'),
                                       check_exact=False, rtol=1e-9)
 
@@ -194,13 +194,13 @@ def test_an_equipment_drift_is_refused_and_changes_nothing(rdf_db_url: str, scen
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100,
+        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, '1', T2100,
                                           modelling_authority=AUTHORITY, parameters=PARAMS)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
         before = {name: _loads(day, name) for name in NAMES + ['InitialState']}
 
         with pytest.raises(RdfDbVariantRefusedError) as error:
-            day.update_from_rdf_db(db, scenario, 1, T2100, variant='drifted')
+            day.update_from_rdf_db(db, scenario, '1', T2100, variant='drifted')
         assert error.value.variant == 'drifted'
         assert error.value.reasons, 'a refusal always says why'
         assert sorted(day.get_variant_ids()) == [V2000, V2015, V2030, 'InitialState'], \
@@ -220,7 +220,7 @@ def test_an_equipment_drift_is_refused_and_changes_nothing(rdf_db_url: str, scen
 
         # refusing a variant that *exists* puts the reasons on that variant's own row: still one row per variant
         with pytest.raises(RdfDbVariantRefusedError):
-            day.update_from_rdf_db(db, scenario, 1, T2100, variant=V2015)
+            day.update_from_rdf_db(db, scenario, '1', T2100, variant=V2015)
         table = day.variants_binding()
         assert table.index.is_unique
         assert table.loc[V2015, 'status'] == 'bound'
@@ -228,23 +228,23 @@ def test_an_equipment_drift_is_refused_and_changes_nothing(rdf_db_url: str, scen
         pd.testing.assert_frame_equal(before[V2015], _loads(day, V2015), check_exact=False, rtol=1e-9)
 
         # the way out is a network of its own, which the refusal message points at
-        separate = pp.network.from_rdf_db(db, scenario, 1, T2100, parameters=PARAMS)
+        separate = pp.network.from_rdf_db(db, scenario, '1', T2100, parameters=PARAMS)
         assert drifted_name(7) in set(separate.get_lines()['name'])
 
 
 def test_a_bulk_load_refuses_one_timestamp(rdf_db_url: str, scenario: str) -> None:
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100,
+        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, '1', T2100,
                                           modelling_authority=AUTHORITY, parameters=PARAMS)
 
         with pytest.raises(RdfDbVariantRefusedError) as error:
-            pp.network.from_rdf_db(db, scenario, 1, timestamps=[T2000, T2100, T2030], parameters=PARAMS)
+            pp.network.from_rdf_db(db, scenario, '1', timestamps=[T2000, T2100, T2030], parameters=PARAMS)
         assert V2100 in str(error.value)
         assert error.value.reasons
         assert error.value.refused is not None and len(error.value.refused) == 1
 
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=[T2000, T2100, T2030],
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=[T2000, T2100, T2030],
                                      on_refusal='skip', parameters=PARAMS)
         assert sorted(day.get_variant_ids()) == [V2000, V2030, 'InitialState']
         binding = _binding(day)
@@ -256,14 +256,15 @@ def test_a_bulk_load_refuses_one_timestamp(rdf_db_url: str, scenario: str) -> No
 def test_variants_binding_describes_every_variant(rdf_db_url: str, scenario: str) -> None:
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
         day.clone_variant(V2000, 'what-if')
 
         frame = day.variants_binding()
         assert list(frame.columns) == ['scenario', 'snapshot', 'modelling_authority', 'timestamp', 'version',
                                        'cloned_from', 'eq', 'ssh', 'case_date', 'status', 'reasons']
-        assert str(frame['timestamp'].dt.tz) == 'UTC' and frame['version'].dtype == 'Int64'
-        assert not pd.isna(frame.loc['InitialState', 'version'])
+        assert str(frame['timestamp'].dt.tz) == 'UTC' and frame['version'].dtype == object
+        assert frame.loc['InitialState', 'version'] == '1'
+        assert frame.loc['what-if', 'version'] == '1', 'a clone of a bound variant stands for its snapshot'
         assert frame.index.name == 'variant'
         binding = _binding(day)
         assert binding[V2015]['scenario'] == scenario
@@ -279,21 +280,21 @@ def test_a_user_clone_does_not_switch_the_network_into_variant_mode(rdf_db_url: 
     """Cloning is the ordinary IIDM idiom; only a named variant or a bulk load opts into variant mode."""
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100,
+        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, '1', T2100,
                                           modelling_authority=AUTHORITY, parameters=PARAMS)
-        network = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
+        network = pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
         network.clone_variant('InitialState', 'what-if')
 
-        assert network.update_from_rdf_db(db, scenario, 1, T2000) == 'diff'
+        assert network.update_from_rdf_db(db, scenario, '1', T2000) == 'diff'
         # and the classic full route still works, handle swap included
-        assert network.update_from_rdf_db(db, scenario, 1, T2100) == 'full'
+        assert network.update_from_rdf_db(db, scenario, '1', T2100) == 'full'
         assert drifted_name(7) in set(network.get_lines()['name'])
 
 
 def test_rdf_db_identity_of_a_variant(rdf_db_url: str, scenario: str) -> None:
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
 
         early = day.rdf_db_identity(db, scenario, variant=V2000)
         late = day.rdf_db_identity(db, scenario, variant=V2030)
@@ -314,7 +315,7 @@ def test_per_variant_export_round_trip(rdf_db_url: str, scenario: str) -> None:
     """Changes recorded on two variants become two successors, which a second network reads back."""
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
         load = str(day.get_loads().index[0])
 
         with day.event_recorder() as recorder:
@@ -323,54 +324,54 @@ def test_per_variant_export_round_trip(rdf_db_url: str, scenario: str) -> None:
             day.set_working_variant(V2030)
             day.update_loads(id=load, p0=333.0)
             day.set_working_variant('InitialState')
-        rows = recorder.to_rdf_updates(db, scenario, 2, per_variant=True)
+        rows = recorder.to_rdf_updates(db, scenario, '2', per_variant=True)
 
-        assert list(rows.columns) == ['snapshot', 'modelling_authority', 'timestamp', 'version', 'models',
+        assert list(rows.columns) == ['snapshot', 'modelling_authority', 'timestamp', 'version', 'rank', 'models',
                                       'exported_events', 'rejected']
         assert sorted(rows.index) == [V2000, V2030]
-        assert all(rows['version'] == 2)
+        assert all(rows['version'] == '2') and all(rows['rank'] == 20)
         assert sorted(rows['timestamp']) == [T2000, T2030]
         assert all(rows['models'])
 
-        reader = pp.network.from_rdf_db(db, scenario, 2, timestamps=[T2000, T2030], parameters=PARAMS)
+        reader = pp.network.from_rdf_db(db, scenario, '2', timestamps=[T2000, T2030], parameters=PARAMS)
         assert _loads(reader, V2000).loc[load, 'p0'] == pytest.approx(111.0)
         assert _loads(reader, V2030).loc[load, 'p0'] == pytest.approx(333.0)
         # the untouched timestamp kept its own version
         snapshots = db.snapshots(scenario)
-        assert T2015 not in set(snapshots[snapshots['version'] == 2]['timestamp'])
+        assert T2015 not in set(snapshots[snapshots['version'] == '2']['timestamp'])
 
 
 def test_one_variant_export(rdf_db_url: str, scenario: str) -> None:
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
         load = str(day.get_loads().index[0])
 
         with day.event_recorder() as recorder:
             day.set_working_variant(V2015)
             day.update_loads(id=load, p0=222.0)
             day.set_working_variant('InitialState')
-        ids = recorder.to_rdf_updates(db, scenario, 3, variant=V2015)
+        ids = recorder.to_rdf_updates(db, scenario, '3', variant=V2015)
         assert ids
 
-        reader = pp.network.from_rdf_db(db, scenario, 3, T2015, parameters=PARAMS)
+        reader = pp.network.from_rdf_db(db, scenario, '3', T2015, parameters=PARAMS)
         assert float(reader.get_loads().loc[load, 'p0']) == pytest.approx(222.0)
 
         with pytest.raises(ValueError, match='drop them'):
-            recorder.to_rdf_updates(db, scenario, 4, T2015, variant=V2015)
+            recorder.to_rdf_updates(db, scenario, '4', T2015, variant=V2015)
         with pytest.raises(ValueError, match='drop them'):
-            recorder.to_rdf_updates(db, scenario, 4, None, AUTHORITY, variant=V2015)
+            recorder.to_rdf_updates(db, scenario, '4', None, AUTHORITY, variant=V2015)
         with pytest.raises(ValueError, match='neither a timestamp'):
-            recorder.to_rdf_updates(db, scenario, 4, per_variant=True, variant=V2015)
+            recorder.to_rdf_updates(db, scenario, '4', per_variant=True, variant=V2015)
         with pytest.raises(ValueError, match='neither a timestamp'):
-            recorder.to_rdf_updates(db, scenario, 4, profiles=['SSH'], per_variant=True)
+            recorder.to_rdf_updates(db, scenario, '4', profiles=['SSH'], per_variant=True)
 
 
 def test_file_exports_take_a_variant(rdf_db_url: str, scenario: str) -> None:
     """The three file exports write the values of the variant they are told to, and restore the working one."""
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
         load = str(day.get_loads().index[0])
 
         with day.event_recorder() as recorder:
@@ -401,7 +402,7 @@ def test_a_load_flow_per_variant(rdf_db_url: str, scenario: str) -> None:
     """The reason the whole feature exists: run a study on every timestamp of a day without reloading anything."""
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
 
         totals = {}
         for name in NAMES:
@@ -419,40 +420,40 @@ def test_variant_argument_errors(rdf_db_url: str, scenario: str) -> None:
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
         with pytest.raises(ValueError, match='give one of the two'):
-            pp.network.from_rdf_db(db, scenario, 1, T2000, timestamps=MOMENTS, parameters=PARAMS)
+            pp.network.from_rdf_db(db, scenario, '1', T2000, timestamps=MOMENTS, parameters=PARAMS)
         with pytest.raises(ValueError, match='give one of the two'):
-            pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, variants={'a': T2000},
+            pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, variants={'a': T2000},
                                    parameters=PARAMS)
         with pytest.raises(ValueError, match='At least one snapshot'):
-            pp.network.from_rdf_db(db, scenario, 1, timestamps=[], parameters=PARAMS)
+            pp.network.from_rdf_db(db, scenario, '1', timestamps=[], parameters=PARAMS)
         with pytest.raises(ValueError, match='on_refusal'):
-            pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, on_refusal='ignore', parameters=PARAMS)
+            pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, on_refusal='ignore', parameters=PARAMS)
         with pytest.raises(ValueError, match='post_processors'):
-            pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, post_processors=['replaceTieLinesByLines'],
+            pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, post_processors=['replaceTieLinesByLines'],
                                    parameters=PARAMS)
         with pytest.raises(ValueError, match='non-blank string'):
-            pp.network.from_rdf_db(db, scenario, 1, variants={' ': T2000}, parameters=PARAMS)
+            pp.network.from_rdf_db(db, scenario, '1', variants={' ': T2000}, parameters=PARAMS)
         with pytest.raises(ValueError, match="Unknown CGMES profile 'XX'"):
-            pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, profiles=['XX'],  # type: ignore[list-item]
+            pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, profiles=['XX'],  # type: ignore[list-item]
                                    parameters=PARAMS)
         with pytest.raises(ValueError, match='must be a timestamp or a'):
-            pp.network.from_rdf_db(db, scenario, variants={'a': (1, T2000)}, parameters=PARAMS)  # type: ignore
+            pp.network.from_rdf_db(db, scenario, variants={'a': ('1', T2000)}, parameters=PARAMS)  # type: ignore
         with pytest.raises(ValueError, match='takes a list of timestamps'):
-            pp.network.from_rdf_db(db, scenario, 1, timestamps=T2000, parameters=PARAMS)  # type: ignore
+            pp.network.from_rdf_db(db, scenario, '1', timestamps=T2000, parameters=PARAMS)  # type: ignore
         with pytest.raises(ValueError, match='on_refusal'):
-            pp.network.from_rdf_db(db, scenario, 1, T2000, on_refusal='zzz', parameters=PARAMS)
+            pp.network.from_rdf_db(db, scenario, '1', T2000, on_refusal='zzz', parameters=PARAMS)
         with pytest.raises(ValueError, match='non-blank string'):
-            pp.network.from_rdf_db(db, scenario, 1, variants={1: T2000}, parameters=PARAMS)  # type: ignore
-        network = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+            pp.network.from_rdf_db(db, scenario, '1', variants={1: T2000}, parameters=PARAMS)  # type: ignore
+        network = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
         for bad in (' ', 5):
             with pytest.raises(ValueError, match='non-blank string'):
                 network.rdf_db_identity(db, scenario, variant=bad)  # type: ignore
             with pytest.raises(ValueError, match='non-blank string'):
-                network.update_from_rdf_db(db, scenario, 1, T2000, variant=bad)  # type: ignore
+                network.update_from_rdf_db(db, scenario, '1', T2000, variant=bad)  # type: ignore
         with network.event_recorder() as recorder:
             network.update_loads(id=str(network.get_loads().index[0]), p0=1.0)
         with pytest.raises(PyPowsyblError, match="has no variant 'nope'"):
-            recorder.to_rdf_updates(db, scenario, 9, variant='nope', clear=False)
+            recorder.to_rdf_updates(db, scenario, '9', variant='nope', clear=False)
 
 
 def test_a_variant_export_opts_the_network_into_variant_mode(rdf_db_url: str, scenario: str) -> None:
@@ -466,9 +467,9 @@ def test_a_variant_export_opts_the_network_into_variant_mode(rdf_db_url: str, sc
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, 1, T2100,
+        db.load_cgmes_from_binary_buffers([eq_drift(7, T2100, suffix=scenario)], scenario, '1', T2100,
                                           modelling_authority=AUTHORITY, parameters=PARAMS)
-        network = pp.network.from_rdf_db(db, scenario, 1, T2000, parameters=PARAMS)
+        network = pp.network.from_rdf_db(db, scenario, '1', T2000, parameters=PARAMS)
         network.clone_variant('InitialState', 'study')
         load = str(network.get_loads().index[0])
 
@@ -476,11 +477,11 @@ def test_a_variant_export_opts_the_network_into_variant_mode(rdf_db_url: str, sc
             network.set_working_variant('study')
             network.update_loads(id=load, p0=55.0)
             network.set_working_variant('InitialState')
-        assert recorder.to_rdf_updates(db, scenario, 4, variant='study')
+        assert recorder.to_rdf_updates(db, scenario, '4', variant='study')
 
         # sticky from here on: the drifted timestamp is refused, not reloaded
         with pytest.raises(RdfDbVariantRefusedError):
-            network.update_from_rdf_db(db, scenario, 1, T2100)
+            network.update_from_rdf_db(db, scenario, '1', T2100)
         assert drifted_name(7) not in set(network.get_lines()['name'])
 
 
@@ -494,11 +495,11 @@ def test_a_classic_operation_forgets_what_your_clones_stood_for(rdf_db_url: str,
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        network = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
+        network = pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
         network.clone_variant('InitialState', 'what-if')
         assert _binding(network)['what-if']['status'] == 'bound'
 
-        assert network.update_from_rdf_db(db, scenario, 1, T2000) == 'diff'
+        assert network.update_from_rdf_db(db, scenario, '1', T2000) == 'diff'
 
         binding = _binding(network)
         assert binding['InitialState']['status'] == 'primary', 'the primary row is never dropped'
@@ -507,11 +508,11 @@ def test_a_classic_operation_forgets_what_your_clones_stood_for(rdf_db_url: str,
             network.rdf_db_identity(db, scenario, variant='what-if')
 
         # in variant mode the same clone keeps its binding
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
         day.clone_variant(V2000, 'kept')
         # 'noop' is the deterministic answer here - the nearest bound variant, the V2030 one, already stands for
         # the target - and it still creates the variant, which is what the route does not tell you
-        assert day.update_from_rdf_db(db, scenario, 1, T2030, variant='moved') == 'noop'
+        assert day.update_from_rdf_db(db, scenario, '1', T2030, variant='moved') == 'noop'
         assert 'moved' in day.get_variant_ids()
         pd.testing.assert_frame_equal(_loads(day, V2030), _loads(day, 'moved'), check_exact=False, rtol=1e-9)
         assert _binding(day)['kept']['status'] == 'bound'
@@ -528,7 +529,7 @@ def test_an_export_without_a_variant_refuses_shared_changes_in_variant_mode(rdf_
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
         load = str(day.get_loads().index[0])
         # a plain line, not one of the merged ones: a merged line is rejected by the export for a reason of its
         # own (its id is a pair), which would hide the rule under test here
@@ -541,11 +542,11 @@ def test_an_export_without_a_variant_refuses_shared_changes_in_variant_mode(rdf_
 
         # the address is still given the classic way - the timestamp of the variant the network is working on
         with pytest.raises(PyPowsyblError, match='not stored per variant'):
-            recorder.to_rdf_updates(db, scenario, 5, T2000, clear=False)
+            recorder.to_rdf_updates(db, scenario, '5', T2000, clear=False)
         # a file export of the same recording says the same thing, named or not
         with pytest.raises(PyPowsyblError, match='not stored per variant'):
             recorder.to_cgmes_diffs()
-        ids = recorder.to_rdf_updates(db, scenario, 5, T2000, unsupported='ignore')
+        ids = recorder.to_rdf_updates(db, scenario, '5', T2000, unsupported='ignore')
         assert ids, 'the steady-state half is still written'
         day.set_working_variant('InitialState')
 
@@ -557,7 +558,7 @@ def test_an_export_without_a_variant_refuses_shared_changes_in_variant_mode(rdf_
             primary_recorder.to_cgmes_diffs()
         assert sorted((primary_recorder.to_cgmes_diffs(unsupported='ignore') or {}).keys()) == ['SSH']
 
-        reader = pp.network.from_rdf_db(db, scenario, 5, T2000, parameters=PARAMS)
+        reader = pp.network.from_rdf_db(db, scenario, '5', T2000, parameters=PARAMS)
         assert float(reader.get_loads().loc[load, 'p0']) == pytest.approx(77.0)
 
 
@@ -572,7 +573,7 @@ def test_file_exports_carry_the_identity_of_the_variant_they_describe(rdf_db_url
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=[T2000, T2030], parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=[T2000, T2030], parameters=PARAMS)
         binding = _binding(day)
         ssh_late = str(binding[V2030]['ssh'])
         ssh_primary = str(binding['InitialState']['ssh'])
@@ -616,30 +617,30 @@ def test_a_variant_unsafe_change_is_refused(rdf_db_url: str, scenario: str) -> N
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        sender = pp.network.from_rdf_db(db, scenario, 1, T2030, parameters=PARAMS)
+        sender = pp.network.from_rdf_db(db, scenario, '1', T2030, parameters=PARAMS)
         line = next(str(i) for i in sender.get_lines().index if ' + ' not in str(i))
         r0 = float(sender.get_lines().loc[line, 'r'])
         with sender.event_recorder() as recorder:
             sender.update_lines(id=line, r=r0 * 2)
             sender.update_loads(id=str(sender.get_loads().index[0]), p0=5.0)
-            recorder.to_rdf_updates(db, scenario, 2, T2030)
+            recorder.to_rdf_updates(db, scenario, '2', T2030)
 
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
         before = {name: _loads(day, name) for name in NAMES}
         with pytest.raises(RdfDbVariantRefusedError) as error:
-            day.update_from_rdf_db(db, scenario, 2, T2030, variant=V2030)
+            day.update_from_rdf_db(db, scenario, '2', T2030, variant=V2030)
         assert any('not stored per variant' in reason for reason in error.value.reasons), error.value.reasons
         assert float(day.get_lines().loc[line, 'r']) == pytest.approx(r0), 'the impedance is shared and untouched'
         for name in NAMES:
             pd.testing.assert_frame_equal(before[name], _loads(day, name), check_exact=False, rtol=1e-9)
 
         with pytest.raises(RdfDbVariantRefusedError):
-            pp.network.from_rdf_db(db, scenario, 1, variants={'a': T2000, 'b': (2, T2030, None)},
+            pp.network.from_rdf_db(db, scenario, '1', variants={'a': T2000, 'b': ('2', T2030, None)},
                                    parameters=PARAMS)
 
         # the very same difference is ordinary work for a network that is not in variant mode
-        classic = pp.network.from_rdf_db(db, scenario, 1, T2030, parameters=PARAMS)
-        assert classic.update_from_rdf_db(db, scenario, 2, T2030) == 'diff'
+        classic = pp.network.from_rdf_db(db, scenario, '1', T2030, parameters=PARAMS)
+        assert classic.update_from_rdf_db(db, scenario, '2', T2030) == 'diff'
         assert float(classic.get_lines().loc[line, 'r']) == pytest.approx(r0 * 2)
 
 
@@ -653,7 +654,7 @@ def test_an_unnamed_export_on_a_user_clone_is_unchanged(rdf_db_url: str, scenari
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        network = pp.network.from_rdf_db(db, scenario, 1, T2030, parameters=PARAMS)
+        network = pp.network.from_rdf_db(db, scenario, '1', T2030, parameters=PARAMS)
         network.clone_variant('InitialState', 'what-if')
         assert _binding(network)['what-if']['status'] == 'bound', 'the clone is tracked...'
         network.set_working_variant('what-if')
@@ -682,19 +683,19 @@ def test_a_cross_scenario_refusal_switches_variant_mode_on(rdf_db_url: str, scen
     """
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        db.load_cgmes(CGMES_ZIP, scenario2, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
-        network = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
+        db.load_cgmes(CGMES_ZIP, scenario2, '1', modelling_authority=AUTHORITY, parameters=PARAMS)
+        network = pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
         network.clone_variant('InitialState', 'keep')
         handle = network._handle  # pylint: disable=protected-access
 
         with pytest.raises(RdfDbVariantRefusedError) as error:
-            network.update_from_rdf_db(db, scenario2, 1, variant='other-day')
+            network.update_from_rdf_db(db, scenario2, '1', variant='other-day')
         assert error.value.reasons
         assert 'other-day' not in network.get_variant_ids()
         assert network._handle is handle  # pylint: disable=protected-access
 
         with pytest.raises(RdfDbVariantRefusedError):
-            network.update_from_rdf_db(db, scenario2, 1)
+            network.update_from_rdf_db(db, scenario2, '1')
         assert network._handle is handle, 'the handle swap must not run once variant mode is on'  # pylint: disable=protected-access
         assert 'keep' in network.get_variant_ids()
 
@@ -721,11 +722,11 @@ PARAMS = {PARAMS!r}
 MOMENTS = [at("20:00"), at("20:15"), at("20:30")]
 with pp.network.connect({rdf_db_url!r}) as db:
     scenario = {scenario!r} + "-thread"
-    db.load_cgmes(CGMES_ZIP, scenario, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
+    db.load_cgmes(CGMES_ZIP, scenario, '1', modelling_authority=AUTHORITY, parameters=PARAMS)
     for i, moment in enumerate(MOMENTS, start=1):
         db.load_cgmes_from_binary_buffers([ssh_variant(i, moment, suffix=scenario)], scenario, None, moment,
                                           modelling_authority=AUTHORITY, parameters=PARAMS)
-    day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+    day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
     stop = []
     reads = [0]
     def reader():
@@ -735,7 +736,7 @@ with pp.network.connect({rdf_db_url!r}) as db:
     t = threading.Thread(target=reader)
     t.start()
     for i in range(40):
-        day.update_from_rdf_db(db, scenario, 1, MOMENTS[i % 2], variant={V2030!r})
+        day.update_from_rdf_db(db, scenario, '1', MOMENTS[i % 2], variant={V2030!r})
     stop.append(True)
     t.join()
     print("OK", reads[0])
@@ -749,12 +750,12 @@ with pp.network.connect({rdf_db_url!r}) as db:
 def test_removed_and_cloned_variants(rdf_db_url: str, scenario: str) -> None:
     with pp.network.connect(rdf_db_url) as db:
         _a_day(db, scenario)
-        day = pp.network.from_rdf_db(db, scenario, 1, timestamps=MOMENTS, parameters=PARAMS)
+        day = pp.network.from_rdf_db(db, scenario, '1', timestamps=MOMENTS, parameters=PARAMS)
 
         day.clone_variant(V2030, 'copy')
         assert _binding(day)['copy']['snapshot'] == _binding(day)[V2030]['snapshot']
         # a user-made clone is a full member: it can be brought to another snapshot like any other variant
-        assert day.update_from_rdf_db(db, scenario, 1, T2000, variant='copy') == 'diff'
+        assert day.update_from_rdf_db(db, scenario, '1', T2000, variant='copy') == 'diff'
         pd.testing.assert_frame_equal(_loads(day, V2000), _loads(day, 'copy'), check_exact=False, rtol=1e-9)
 
         day.remove_variant('copy')

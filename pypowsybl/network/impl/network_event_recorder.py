@@ -35,7 +35,7 @@ import pypowsybl._pypowsybl as _pp
 from pypowsybl.utils import create_data_frame_from_series_array, path_to_str
 
 from .rdf_db import (Profile, _authority_to_str, _check_scenario, _check_variant, _profiles_to_list,
-                     _timestamp_to_str, _typed, _version_to_int)
+                     _timestamp_to_str, _typed, _version_to_str)
 
 if TYPE_CHECKING:
     from .network import Network
@@ -320,7 +320,7 @@ class NetworkEventRecorder:
             _write_text(os.path.join(path, f'{base_name}_{profile}_DIFF.xml'), xml)
         return None
 
-    def to_rdf_updates(self, db: 'RdfDatabase', scenario: str, version: Optional[int] = None,
+    def to_rdf_updates(self, db: 'RdfDatabase', scenario: str, version: Optional[str] = None,
                        timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
                        profiles: Optional[Sequence[Profile]] = None, *, variant: Optional[str] = None,
                        per_variant: bool = False, unsupported: str = 'raise', granularity: str = 'full_object',
@@ -337,8 +337,10 @@ class NetworkEventRecorder:
         Args:
             db: an open connection, see :func:`pypowsybl.network.connect_rdf_db`
             scenario: the base scenario the difference is made against, for instance ``"2021-02-09"``; required
-            version: the version of the new snapshot, an ``int`` greater than the head's (gaps are allowed);
-                ``None`` takes the head's plus one, 1 on a new timestamp
+            version: the version name of the new snapshot; it must rank above the head's in the scenario's version
+                registry (a permissive registry appends a name it does not hold, a strict one refuses it). ``None``
+                takes the lowest registered name ranking above the head (in a permissive registry without one, the
+                next number it lacks)
             timestamp: the moment the new snapshot describes, a timezone-aware :class:`datetime.datetime`;
                 ``None`` is the base timestamp
             modelling_authority: the tree to write into; ``None`` for the only tree of the scenario, or - when it
@@ -370,14 +372,15 @@ class NetworkEventRecorder:
         Returns:
             the ids of the stored models, in the order ``EQ``, ``SSH``. With ``per_variant=True`` a dataframe
             indexed by ``variant`` with the columns ``snapshot``, ``modelling_authority``, ``timestamp``
-            (``datetime64[ns, UTC]``), ``version`` (nullable ``Int64``), ``models`` (``;``-joined ids),
+            (``datetime64[ns, UTC]``), ``version`` (the name, ``None`` when nothing was written), ``rank``
+            (nullable ``Int64``), ``models`` (``;``-joined ids),
             ``exported_events`` (int) and ``rejected``
 
         Raises:
             pypowsybl.PyPowsyblError: nothing was recorded, the network belongs to another scenario, the network is
                 not at the head the write applies on, the address is already taken, a variant stands for no
                 snapshot, or a metadata name the database decides was given
-            TypeError: a naive ``timestamp``, or a ``version`` that is not an int
+            TypeError: a naive ``timestamp``, or a ``version`` that is not a str
             ValueError: a bad ``unsupported`` or ``granularity`` value, an unknown profile, or ``per_variant``
                 combined with a ``timestamp``, a ``modelling_authority``, ``profiles`` or a ``variant``
 
@@ -385,10 +388,10 @@ class NetworkEventRecorder:
             .. code-block:: python
 
                 with pp.network.connect('memory:demo') as db:
-                    network = pp.network.from_rdf_db(db, '2021-02-09', 1)
+                    network = pp.network.from_rdf_db(db, '2021-02-09', '1')
                     with network.event_recorder() as recorder:
                         network.update_loads(id='LOAD', p0=420.0)
-                        ids = recorder.to_rdf_updates(db, '2021-02-09', 1,
+                        ids = recorder.to_rdf_updates(db, '2021-02-09', '1',
                                                       datetime(2021, 2, 9, 8, 30, tzinfo=timezone.utc))
         """
         self._check_network()
@@ -402,7 +405,7 @@ class NetworkEventRecorder:
             options = self._flatten_options(unsupported, granularity, metadata, None)
             rows = _typed(create_data_frame_from_series_array(_pp.export_network_events_to_rdf_db_per_variant(
                 self._handle, db._check_open(), scenario,  # pylint: disable=protected-access
-                _version_to_int(version), options)))
+                _version_to_str(version), options)))
             if clear:
                 self.clear()
             return rows
@@ -412,7 +415,7 @@ class NetworkEventRecorder:
         options = self._flatten_options(unsupported, granularity, metadata, variant)
         ids = _pp.export_network_events_to_rdf_db(
             self._handle, db._check_open(), scenario,  # pylint: disable=protected-access
-            _version_to_int(version), _timestamp_to_str(timestamp), _authority_to_str(modelling_authority),
+            _version_to_str(version), _timestamp_to_str(timestamp), _authority_to_str(modelling_authority),
             _profiles_to_list(profiles), options)
         if clear:
             self.clear()

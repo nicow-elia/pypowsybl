@@ -15,7 +15,7 @@ They build on each other but each one is self-contained: every notebook connects
 
 Every call into the database names a **scenario**: the base grid model the data belongs to, in practice one day.
 It is a required argument and never guessed, because a database is expected to hold many days side by side. Inside
-a scenario a state is addressed by a **version** (an `int`, one study state), a **timestamp** (a timezone-aware
+a scenario a state is addressed by a **version** (a name such as `'1'`, one study state, ranked by the scenario's version registry), a **timestamp** (a timezone-aware
 `datetime`, a moment of that day) and a **modelling authority** (the TSO whose files it is; left out here, because
 every scenario of these notebooks holds one). Differences never cross scenarios: walking a network from one day to
 another reloads it.

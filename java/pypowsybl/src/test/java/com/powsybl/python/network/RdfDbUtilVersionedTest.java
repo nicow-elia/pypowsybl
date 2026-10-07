@@ -26,6 +26,7 @@ import java.time.Instant;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BinaryOperator;
+import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -71,9 +72,9 @@ class RdfDbUtilVersionedTest {
     /** Store the base grid model as the root of {@code scenario}, and the second model as the root of "other". */
     static Network twoScenarios(RdfDbConnection db) {
         List<String> other = RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.miniBusBranch().dataSource(), OTHER,
-                1, null, null, List.of(), importParameters(), null);
+                "1", null, null, List.of(), importParameters(), null);
         assertThat(other).isNotEmpty();
-        List<String> root = RdfDbUtil.loadCgmes(db, microGridBe(), S, 1, null, null, List.of(), importParameters(),
+        List<String> root = RdfDbUtil.loadCgmes(db, microGridBe(), S, "1", null, null, List.of(), importParameters(),
                 null);
         assertThat(root).isNotEmpty();
         return load(db, S, 1, null);
@@ -81,28 +82,29 @@ class RdfDbUtilVersionedTest {
 
     /** Load one snapshot of a scenario, all profiles, the modelling authority left to the bindings. */
     static Network load(RdfDbConnection db, String scenario, Integer version, String timestamp) {
-        return RdfDbUtil.load(db, scenario, version, timestamp, null, List.of(), importParameters(), List.of(),
+        return RdfDbUtil.load(db, scenario, name(version), false, timestamp, null, List.of(), importParameters(), List.of(),
                 null);
     }
 
     /** Bring a network to a snapshot of a scenario, all defaults. */
     static RdfDbUtil.UpdateOutcome update(Network network, RdfDbConnection db, String scenario, Integer version,
                                           String timestamp, Map<String, String> options) {
-        return RdfDbUtil.update(network, db, scenario, version, timestamp, null, List.of(), options,
+        return RdfDbUtil.update(network, db, scenario, name(version), false, timestamp, null, List.of(), options,
                 importParameters(), null);
     }
 
     /** Ingest the instance files of one timestamp as a further snapshot of {@link #S}. */
     static List<String> ingest(RdfDbConnection db, String scenario, ReadOnlyDataSource files, Integer version,
                                String timestamp) {
-        return RdfDbUtil.loadCgmes(db, files, scenario, version, timestamp, null, List.of(), importParameters(),
+        return RdfDbUtil.loadCgmes(db, files, scenario, name(version), timestamp, null, List.of(), importParameters(),
                 null);
     }
 
     /** Store recorded changes as a snapshot of {@code scenario}. */
     static List<String> export(NetworkEventRecording recording, RdfDbConnection db, String scenario,
                                Integer version, String timestamp, Map<String, String> options) {
-        return RdfDbUtil.exportRecording(recording, db, scenario, version, timestamp, null, List.of(), options);
+        return RdfDbUtil.exportRecording(recording, db, scenario, name(version), timestamp, null, List.of(),
+                options);
     }
 
     /** Move one load, which is a steady-state-only change and therefore a fast-route difference. */
@@ -114,6 +116,14 @@ class RdfDbUtilVersionedTest {
         load.setP0(value);
         recording.stop();
         return export(recording, db, S, version, timestamp, Map.of());
+    }
+
+    /**
+     * The version name of a version number: the tests write the numeric names "1", "2", ... that a scenario's
+     * permissive registry appends in order, so that they read like the integer versions they replaced.
+     */
+    static String name(Integer version) {
+        return version == null ? null : String.valueOf(version);
     }
 
     /** The timestamp and the version of a snapshot, for compact assertions. */
@@ -132,9 +142,9 @@ class RdfDbUtilVersionedTest {
             record(db, network, 2, T0830, 42.0);
             assertEquals(List.of(BE), RdfDbUtil.modellingAuthorities(db, S));
 
-            Network open = RdfDbUtil.load(db, S, 2, "2014-06-01T08:30:00Z", null, List.of(), importParameters(),
+            Network open = RdfDbUtil.load(db, S, "2", false, "2014-06-01T08:30:00Z", null, List.of(), importParameters(),
                     List.of(), null);
-            Network named = RdfDbUtil.load(db, S, 2, "2014-06-01T08:30:00+00:00", BE, List.of(),
+            Network named = RdfDbUtil.load(db, S, "2", false, "2014-06-01T08:30:00+00:00", BE, List.of(),
                     importParameters(), List.of(), null);
             assertEquals(42.0, open.getLoads().iterator().next().getP0(), 1e-9);
             assertEquals(42.0, named.getLoads().iterator().next().getP0(), 1e-9);
@@ -188,7 +198,7 @@ class RdfDbUtilVersionedTest {
         assertEquals(before * 1.5, load(db, scenario, null, T0830).getLoads().iterator().next().getP0(), 1e-6);
         assertEquals(44.0, load(db, scenario, null, T0845).getLoads().iterator().next().getP0(), 1e-9);
 
-        assertThat(RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), scenario, 1,
+        assertThat(RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), scenario, "1",
                 null, NL, List.of(), importParameters(), null)).isNotEmpty();
         assertThatThrownBy(() -> ingest(db, scenario, disagreeing(timestampFiles("two", 2.0, T0930, false)), null,
                 T0930))
@@ -231,13 +241,13 @@ class RdfDbUtilVersionedTest {
     void twoModellingAuthoritiesMustBeNamed() {
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
             twoScenarios(db);
-            assertThat(RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), S, 1,
+            assertThat(RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), S, "1",
                     null, NL, List.of(), importParameters(), null)).isNotEmpty();
             assertEquals(List.of(BE, NL), RdfDbUtil.modellingAuthorities(db, S));
 
             List<Runnable> reads = List.of(
                 () -> load(db, S, 1, BASE),
-                () -> RdfDbUtil.checkpoint(db, S, 1, null, null),
+                () -> RdfDbUtil.checkpoint(db, S, "1", null, null),
                 () -> RdfDbUtil.versions(db, S, null, null),
                 () -> RdfDbUtil.timestamps(db, S, null));
             for (Runnable read : reads) {
@@ -248,23 +258,23 @@ class RdfDbUtilVersionedTest {
             }
             // named, every read works - including the network of the second authority, whose boundary is the one
             // the first stored
-            Network nl = RdfDbUtil.load(db, S, 1, null, NL, List.of(), importParameters(), List.of(), null);
+            Network nl = RdfDbUtil.load(db, S, "1", false, null, NL, List.of(), importParameters(), List.of(), null);
             assertEquals(xiidm(Network.read(CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(),
                     importProperties())), xiidm(nl));
             assertEquals(NL, RdfDbUtil.identity(nl, db, S).get(RdfDbUtil.MODELLING_AUTHORITY));
             assertEquals(1, RdfDbUtil.versions(db, S, BASE, NL).size());
             assertEquals(1, RdfDbUtil.timestamps(db, S, NL).size());
-            assertThat(RdfDbUtil.checkpoint(db, S, 1, null, BE)).contains("snapshot");
+            assertThat(RdfDbUtil.checkpoint(db, S, "1", null, BE)).contains("snapshot");
 
             // the CGM question - every authority at one moment - is one query
             List<RdfDbUtil.AssemblyRow> assembly = RdfDbUtil.assembly(db, S, BASE, null);
             assertEquals(List.of(BE, NL), assembly.stream().map(RdfDbUtil.AssemblyRow::modellingAuthority).toList());
-            assertThat(assembly).allMatch(row -> row.snapshot() != null && row.snapshot().version() == 1);
+            assertThat(assembly).allMatch(row -> row.snapshot() != null && row.snapshot().version().equals("1"));
             assertThat(RdfDbUtil.assembly(db, S, T0830, null))
                     .as("an authority without a snapshot at that moment is a row without one, not an absent row")
                     .hasSize(2).allMatch(row -> row.snapshot() == null);
-            assertEquals(List.of("modelling_authority", "snapshot", "timestamp", "version", "profiles", "kind",
-                            "depth", "has_full", "fast", "members"),
+            assertEquals(List.of("modelling_authority", "snapshot", "timestamp", "version", "rank", "profiles",
+                            "kind", "depth", "has_full", "fast", "members"),
                     columns(RdfDbUtil.assemblyMapper(), assembly));
             assertThatThrownBy(() -> RdfDbUtil.assembly(db, S, "", null))
                     .isInstanceOf(PowsyblException.class)
@@ -272,7 +282,7 @@ class RdfDbUtilVersionedTest {
         }
     }
 
-    /** What crosses the C API: an ISO instant with an offset, and -1 for "no version". */
+    /** What crosses the C API: an ISO instant with an offset; a version is a name and crosses as text. */
     @Test
     void theCArgumentsAreReadStrictly() {
         assertEquals(Instant.parse(T0830), RdfDbUtil.toInstant("2014-06-01T10:30:00+02:00"));
@@ -283,8 +293,103 @@ class RdfDbUtilVersionedTest {
         assertThatThrownBy(() -> RdfDbUtil.toInstant("8:30"))
                 .isInstanceOf(PowsyblException.class)
                 .hasMessageContaining("is not a timestamp");
-        assertEquals(null, RdfDbUtil.toVersion(RdfDbUtil.NO_VERSION));
-        assertEquals(3, RdfDbUtil.toVersion(3));
+    }
+
+    /**
+     * A version is a name the registry of the scenario ranks: a read at a name takes the highest ranking version at
+     * or below it, an exact read that version or nothing.
+     */
+    @Test
+    void aReadAtANameTakesTheHighestRankAtOrBelowIt() {
+        try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
+            Network network = twoScenarios(db);
+            for (String name : List.of("DA", "ID", "RT")) {
+                RdfDbUtil.editRegistry(db, S, "add", name, null, List.of(), List.of(), false);
+            }
+            NetworkEventRecording recording = new NetworkEventRecording(network);
+            recording.start();
+            network.getLoads().iterator().next().setP0(41.0);
+            recording.stop();
+            RdfDbUtil.exportRecording(recording, db, S, "DA", T0830, null, List.of(), Map.of());
+            recording.start();
+            network.getLoads().iterator().next().setP0(42.0);
+            recording.stop();
+            RdfDbUtil.exportRecording(recording, db, S, "ID", T0830, null, List.of(), Map.of());
+
+            assertEquals(List.of("DA", "ID"), RdfDbUtil.versions(db, S, T0830, null).stream()
+                    .map(SnapshotInfo::version).toList());
+            assertEquals(List.of(20, 30), RdfDbUtil.versions(db, S, T0830, null).stream()
+                    .map(SnapshotInfo::rank).toList());
+            Function<Network, Double> p0 = n -> n.getLoads().iterator().next().getP0();
+            assertEquals(42.0, p0.apply(RdfDbUtil.load(db, S, "RT", false, T0830, null, List.of(),
+                    importParameters(), List.of(), null)), 1e-9, "RT is not written: ID is the highest below it");
+            assertEquals(41.0, p0.apply(RdfDbUtil.load(db, S, "DA", true, T0830, null, List.of(),
+                    importParameters(), List.of(), null)), 1e-9);
+            assertThatThrownBy(() -> RdfDbUtil.load(db, S, "RT", true, T0830, null, List.of(), importParameters(),
+                    List.of(), null))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("=RT)");
+            assertThatThrownBy(() -> RdfDbUtil.load(db, S, null, true, T0830, null, List.of(), importParameters(),
+                    List.of(), null))
+                    .as("the head is never exact")
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("an exact address needs a version name");
+
+            Network reader = RdfDbUtil.load(db, S, "DA", true, T0830, null, List.of(), importParameters(), List.of(),
+                    null);
+            RdfDbUtil.UpdateOutcome outcome = RdfDbUtil.update(reader, db, S, "RT", false, T0830, null, List.of(),
+                    Map.of(), importParameters(), null);
+            assertEquals("diff", RdfDbUtil.updateInfo(outcome).get(RdfDbUtil.ROUTE));
+            assertEquals("ID", RdfDbUtil.identity(reader, null, null).get(RdfDbUtil.VERSION));
+            assertEquals("ID", RdfDbUtil.assembly(db, S, T0830, "RT").get(0).snapshot().version());
+            assertEquals(30, RdfDbUtil.assembly(db, S, T0830, "RT").get(0).snapshot().rank());
+        }
+    }
+
+    /** The registry is read as rows and edited through one entry point whose answer is the registry's state. */
+    @Test
+    void theRegistryIsEditedThroughOneEntryPoint() {
+        try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
+            String fresh = "2014-06-01-registry";
+            assertThat(RdfDbUtil.registry(db, fresh)).isEmpty();
+            assertEquals(Map.of(RdfDbUtil.RANK, "", "permissive", "true", "rev", "0"),
+                    RdfDbUtil.editRegistry(db, fresh, "refresh", null, null, List.of(), List.of(), false));
+            Map<String, String> created = RdfDbUtil.editRegistry(db, fresh, "create", null, null, List.of("DA", "ID"),
+                    List.of(), false);
+            assertEquals("false", created.get("permissive"));
+            assertThatThrownBy(() -> ingest(db, fresh, microGridBe(), 7, null))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("version '7' is not registered in scenario '" + fresh + "'");
+            assertThat(RdfDbUtil.loadCgmes(db, microGridBe(), fresh, null, null, BE, List.of(), importParameters(),
+                    null)).isNotEmpty();
+            assertEquals("DA", RdfDbUtil.snapshots(db, fresh).get(0).version(), "a root takes the lowest name");
+
+            assertEquals("30", RdfDbUtil.editRegistry(db, fresh, "add", "RT", null, List.of(), List.of(), false)
+                    .get(RdfDbUtil.RANK));
+            assertEquals("25", RdfDbUtil.editRegistry(db, fresh, "insert", "IDA", "ID", List.of(), List.of(), false)
+                    .get(RdfDbUtil.RANK));
+            RdfDbUtil.editRegistry(db, fresh, "rename", "IDA", "ID2", List.of(), List.of(), false);
+            RdfDbUtil.editRegistry(db, fresh, "rerank", null, null, List.of("ID2", "RT"), List.of(40, 35), false);
+            RdfDbUtil.editRegistry(db, fresh, "mark_transient", "ID2", null, List.of(), List.of(), true);
+            assertEquals(List.of(new RdfDbUtil.RegistryRow("DA", 10, false), new RdfDbUtil.RegistryRow("ID", 20, false),
+                            new RdfDbUtil.RegistryRow("RT", 35, false), new RdfDbUtil.RegistryRow("ID2", 40, true)),
+                    RdfDbUtil.registry(db, fresh));
+            RdfDbUtil.editRegistry(db, fresh, "delete", "ID2", null, List.of(), List.of(), false);
+            assertEquals(List.of("name", "rank", "transient"),
+                    columns(RdfDbUtil.registryMapper(), RdfDbUtil.registry(db, fresh)));
+            assertThatThrownBy(() -> RdfDbUtil.editRegistry(db, fresh, "rerank", null, null, List.of("DA"),
+                    List.of(35), false))
+                    .as("two names never share a rank")
+                    .isInstanceOf(PowsyblException.class);
+            assertThatThrownBy(() -> RdfDbUtil.editRegistry(db, fresh, "rename", "DA", "D1", List.of(), List.of(),
+                    false))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("cannot be renamed");
+            assertThatThrownBy(() -> RdfDbUtil.editRegistry(db, fresh, "nope", null, null, List.of(), List.of(),
+                    false))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("unknown version registry operation 'nope'");
+        }
     }
 
     @Test
@@ -299,12 +404,14 @@ class RdfDbUtilVersionedTest {
                     .containsExactlyInAnyOrder(BASE + "/1", T0830 + "/1", T0830 + "/3");
             assertEquals(1, RdfDbUtil.snapshots(db, OTHER).size(), "the other scenario is untouched");
             assertEquals(2, RdfDbUtil.timestamps(db, S, null).size());
-            assertEquals(List.of(1, 3), RdfDbUtil.versions(db, S, T0830, null).stream()
+            assertEquals(List.of("1", "3"), RdfDbUtil.versions(db, S, T0830, null).stream()
                     .map(SnapshotInfo::version).toList());
-            assertThatThrownBy(() -> record(db, network, 2, T0830, 44.0))
-                    .as("versions only grow")
+            assertEquals(List.of(10, 20), RdfDbUtil.versions(db, S, T0830, null).stream()
+                    .map(SnapshotInfo::rank).toList(), "the permissive registry appended 3 after 1");
+            assertThatThrownBy(() -> record(db, network, 1, T0830, 44.0))
+                    .as("a new version ranks above the head it is written on")
                     .isInstanceOf(PowsyblException.class)
-                    .hasMessageContaining("not greater than the head version 3");
+                    .hasMessageContaining("version '1' (rank 10) is not above the parent '3' (rank 20)");
             assertThat(RdfDbUtil.models(db, S)).anyMatch(model -> model.isDiff() && model.fastPredicatesOnly());
         }
     }
@@ -379,7 +486,8 @@ class RdfDbUtilVersionedTest {
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
             ingest(db, S, microGridBe(), null, null);
             Network network = load(db, S, null, null);
-            RdfDbUtil.UpdateOutcome outcome = RdfDbUtil.update(network, db, S, null, null, null, List.of("SSH"),
+            RdfDbUtil.UpdateOutcome outcome = RdfDbUtil.update(network, db, S, null, false, null, null,
+                    List.of("SSH"),
                     Map.of(), importParameters(), null);
             assertEquals(Map.of(RdfDbUtil.ROUTE, "update"), RdfDbUtil.updateInfo(outcome));
         }
@@ -531,7 +639,7 @@ class RdfDbUtilVersionedTest {
                 () -> RdfDbUtil.versions(db, " ", null, null),
                 () -> RdfDbUtil.graphs(db, " "),
                 () -> RdfDbUtil.clear(db, " "),
-                () -> RdfDbUtil.checkpoint(db, " ", 1, null, null),
+                () -> RdfDbUtil.checkpoint(db, " ", "1", null, null),
                 () -> load(db, " ", 1, null),
                 () -> ingest(db, " ", microGridBe(), 1, null),
                 () -> export(recording, db, " ", 2, null, Map.of()),
@@ -550,7 +658,7 @@ class RdfDbUtilVersionedTest {
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
             Network network = twoScenarios(db);
             record(db, network, 1, T0830, 45.0);
-            String iri = RdfDbUtil.checkpoint(db, S, 1, T0830, null);
+            String iri = RdfDbUtil.checkpoint(db, S, "1", T0830, null);
             assertThat(iri).contains(S);
             assertThat(RdfDbUtil.snapshots(db, S))
                     .filteredOn(info -> info.iri().equals(iri))
@@ -569,8 +677,8 @@ class RdfDbUtilVersionedTest {
             assertEquals(2, RdfDbUtil.scenarioRows(db).size());
             assertEquals(BE, RdfDbUtil.scenarioRows(db).stream().filter(row -> row.scenario().equals(S))
                     .findFirst().orElseThrow().modellingAuthorities());
-            assertEquals(List.of("snapshot", "scenario", "modelling_authority", "timestamp", "version", "profiles",
-                            "kind", "parent", "edge", "depth", "has_full", "fast", "members", "created",
+            assertEquals(List.of("snapshot", "scenario", "modelling_authority", "timestamp", "version", "rank",
+                            "profiles", "kind", "parent", "edge", "depth", "has_full", "fast", "members", "created",
                             "description"),
                     columns(RdfDbUtil.snapshotsMapper(), RdfDbUtil.snapshots(db, S)));
             assertEquals(List.of("timestamp", "modelling_authority", "root", "head", "version_count",

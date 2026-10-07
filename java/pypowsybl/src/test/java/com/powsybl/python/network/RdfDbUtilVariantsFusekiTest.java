@@ -90,7 +90,7 @@ class RdfDbUtilVariantsFusekiTest extends AbstractFusekiTest {
             recording.stop();
 
             List<RdfDbUtil.VariantExportRow> rows =
-                    RdfDbUtil.exportRecordingPerVariant(recording, db, scenario, 2, Map.of());
+                    RdfDbUtil.exportRecordingPerVariant(recording, db, scenario, "2", Map.of());
             assertThat(rows).hasSize(2).allMatch(row -> !row.models().isEmpty());
 
             // a second connection, i.e. what another process sees

@@ -159,7 +159,7 @@ def _java_split(info: Dict[str, str]) -> str:
 
 
 def _update_info(network: pp.network.Network, db: pp.network.RdfDatabase, scenario: str,
-                 version: int) -> Dict[str, str]:
+                 version: str) -> Dict[str, str]:
     """
     Run one update through the raw binding so that the Java timings of that very call can be read back.
 
@@ -167,7 +167,7 @@ def _update_info(network: pp.network.Network, db: pp.network.RdfDatabase, scenar
     for an API and the wrong thing for a benchmark; this repeats the call one level lower.
     """
     outcome = _pp.update_network_from_rdf_db(
-        network._handle, db._check_open(), scenario, version, '', '', [],  # pylint: disable=protected-access
+        network._handle, db._check_open(), scenario, version, False, '', '', [],  # pylint: disable=protected-access
         {'max_diff_chain': '200'}, PARAMS, None)
     return _pp.get_rdf_db_update_info(outcome)
 
@@ -184,32 +184,32 @@ def measure(url: str, label: str) -> Dict[str, float]:  # pylint: disable=too-ma
 
     # (u) upload: a root can be written once per scenario, so every run needs a scenario of its own
     def upload() -> None:
-        pp.network.connect(url).load_cgmes(CGMES_ZIP, f'{scenario}-u-{uuid4().hex[:8]}', 1,
+        pp.network.connect(url).load_cgmes(CGMES_ZIP, f'{scenario}-u-{uuid4().hex[:8]}', '1',
                                            modelling_authority=AUTHORITY, parameters=PARAMS)
 
     numbers['u'] = _median_ms(upload)
-    _report('(u) upload root', 'db.load_cgmes(zip, s, 1, modelling_authority=a)', numbers['u'])
+    _report('(u) upload root', "db.load_cgmes(zip, s, '1', modelling_authority=a)", numbers['u'])
 
     with pp.network.connect(url) as db:
         # The store the rest of the run reads from, with a second day in it so that nothing is measured on an
         # unrealistically empty database
-        db.load_cgmes(CGMES_ZIP, scenario, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
-        db.load_cgmes_from_binary_buffers([next_day_zip()], other, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
+        db.load_cgmes(CGMES_ZIP, scenario, '1', modelling_authority=AUTHORITY, parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([next_day_zip()], other, '1', modelling_authority=AUTHORITY, parameters=PARAMS)
 
         def cold() -> None:
             with pp.network.connect(url, cache=False) as fresh:
-                pp.network.from_rdf_db(fresh, scenario, 1, parameters=PARAMS)
+                pp.network.from_rdf_db(fresh, scenario, '1', parameters=PARAMS)
 
         numbers['b'] = _median_ms(cold)
         _report('(b) db load, cold', 'fresh connection, cache off', numbers['b'])
 
-        numbers['c'] = _median_ms(lambda: pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS))
+        numbers['c'] = _median_ms(lambda: pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS))
         _report('(c) db load, warm', 'same connection, cache on', numbers['c'])
 
         # (e1) / (e500): the export alone. The changes are recorded once, outside the timed region, and every
         # timed call stores the very same events again as a new version - which clear=False makes possible and
         # which the database allows. What is measured is to_rdf_updates and nothing else
-        sender = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
+        sender = pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
         counter = [0]
 
         def export(change_count: int) -> Callable[[], None]:
@@ -220,7 +220,7 @@ def measure(url: str, label: str) -> Dict[str, float]:  # pylint: disable=too-ma
 
             def run() -> None:
                 counter[0] += 1
-                recorder.to_rdf_updates(db, scenario, 1 + counter[0], clear=False)
+                recorder.to_rdf_updates(db, scenario, str(1 + counter[0]), clear=False)
             return run
 
         numbers['e1'] = _median_ms(export(1))
@@ -234,13 +234,13 @@ def measure(url: str, label: str) -> Dict[str, float]:  # pylint: disable=too-ma
             counter[0] += 1
             with sender.event_recorder() as recorder:
                 _change_loads(sender, 500, 700.0 + counter[0])
-                recorder.to_rdf_updates(db, scenario, 1 + counter[0])
+                recorder.to_rdf_updates(db, scenario, str(1 + counter[0]))
 
         numbers['e500r'] = _median_ms(record_and_export)
         _report('(e500r) 500 changes + export', '500 update_loads, then to_rdf_updates', numbers['e500r'])
 
-        head = 1 + counter[0]
-        versions = [1 + counter[0] - i for i in range(10, 0, -1)]
+        head = str(1 + counter[0])
+        versions = [str(1 + counter[0] - i) for i in range(10, 0, -1)]
 
         # One difference: a network sitting one version behind the head, toggled back and forth
         walker = pp.network.from_rdf_db(db, scenario, versions[-2], parameters=PARAMS)
@@ -272,27 +272,27 @@ def measure(url: str, label: str) -> Dict[str, float]:  # pylint: disable=too-ma
         # (f) the full route inside one scenario: a timestamp whose equipment drifted cannot be applied in place
         db.load_cgmes_from_binary_buffers([eq_drift(7, at('23:00'))], scenario, None, at('23:00'),
                                           modelling_authority=AUTHORITY, parameters=PARAMS)
-        drifter = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
+        drifter = pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
         step = [0]
 
         def drift() -> None:
             step[0] += 1
             if step[0] % 2:
-                drifter.update_from_rdf_db(db, scenario, 1, at('23:00'))
+                drifter.update_from_rdf_db(db, scenario, '1', at('23:00'))
             else:
-                drifter.update_from_rdf_db(db, scenario, 1)
+                drifter.update_from_rdf_db(db, scenario, '1')
 
         numbers['f'] = _median_ms(drift)
         _report('(f) full, same scenario', 'EQ drift -> update_from_rdf_db reloads', numbers['f'])
 
         # (g) the other way to the full route: a snapshot of another scenario, decided without a plan query
-        crosser = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
+        crosser = pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
         side = [0]
 
         def full() -> None:
             side[0] += 1
             target = other if side[0] % 2 else scenario
-            crosser.update_from_rdf_db(db, target, 1)
+            crosser.update_from_rdf_db(db, target, '1')
 
         numbers['g'] = _median_ms(full)
         _report('(g) full, cross-scenario', 'update_from_rdf_db -> full reload', numbers['g'])
@@ -315,14 +315,14 @@ def _build_day(db: pp.network.RdfDatabase, scenario: str, moments: List[datetime
     Ingesting the same day from files would be more realistic and an order of magnitude dearer, and what is
     measured below reads the stored differences either way.
     """
-    db.load_cgmes(CGMES_ZIP, scenario, 1, modelling_authority=AUTHORITY, parameters=PARAMS)
-    sender = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
+    db.load_cgmes(CGMES_ZIP, scenario, '1', modelling_authority=AUTHORITY, parameters=PARAMS)
+    sender = pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
     load_id = sorted(sender.get_loads().index)[0]
     for i, moment in enumerate(moments, start=1):
         with sender.event_recorder() as recorder:
             sender.update_loads(id=load_id, p0=100.0 + i)
-            recorder.to_rdf_updates(db, scenario, 1, moment)
-        sender.update_from_rdf_db(db, scenario, 1)
+            recorder.to_rdf_updates(db, scenario, '1', moment)
+        sender.update_from_rdf_db(db, scenario, '1')
 
 
 def _measure_day_as_variants(db: pp.network.RdfDatabase, url: str) -> Dict[str, float]:
@@ -341,28 +341,28 @@ def _measure_day_as_variants(db: pp.network.RdfDatabase, url: str) -> Dict[str, 
     _build_day(db, scenario, moments)
 
     numbers['v'] = _median_ms(
-        lambda: pp.network.from_rdf_db(db, scenario, 1, timestamps=moments, parameters=PARAMS))
+        lambda: pp.network.from_rdf_db(db, scenario, '1', timestamps=moments, parameters=PARAMS))
     _report(f'(v) day of {DAY_TIMESTEPS} as variants', 'from_rdf_db(timestamps=[...])', numbers['v'])
 
     start = time.perf_counter()
     for moment in moments:
-        pp.network.from_rdf_db(db, scenario, 1, moment, parameters=PARAMS)
+        pp.network.from_rdf_db(db, scenario, '1', moment, parameters=PARAMS)
     numbers['vsep'] = (time.perf_counter() - start) * 1000.0
     _report(f'(vsep) {DAY_TIMESTEPS} separate loads', 'one network per timestamp, single run', numbers['vsep'])
 
-    walker = pp.network.from_rdf_db(db, scenario, 1, parameters=PARAMS)
+    walker = pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS)
     start = time.perf_counter()
     for moment in moments:
-        walker.update_from_rdf_db(db, scenario, 1, moment)
+        walker.update_from_rdf_db(db, scenario, '1', moment)
     numbers['vwalk'] = (time.perf_counter() - start) * 1000.0
     _report(f'(vwalk) {DAY_TIMESTEPS} updates', 'one network walking the day, single run', numbers['vwalk'])
 
-    day = pp.network.from_rdf_db(db, scenario, 1, timestamps=moments, parameters=PARAMS)
+    day = pp.network.from_rdf_db(db, scenario, '1', timestamps=moments, parameters=PARAMS)
     toggle = [0]
 
     def move_one() -> None:
         toggle[0] += 1
-        day.update_from_rdf_db(db, scenario, 1, moments[toggle[0] % 2], variant='study')
+        day.update_from_rdf_db(db, scenario, '1', moments[toggle[0] % 2], variant='study')
 
     numbers['v1'] = _median_ms(move_one)
     _report('(v1) one variant moved', 'update_from_rdf_db(..., variant=)', numbers['v1'])

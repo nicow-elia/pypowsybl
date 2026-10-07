@@ -65,7 +65,7 @@ class RdfDbUtilVariantsTest {
     /** A bulk load at the head of each timestamp, the modelling authority left to the bindings. */
     static Network loadVariants(RdfDbConnection db, String scenario, List<String> variantIds,
                                 List<String> timestamps) {
-        return RdfDbUtil.loadVariants(db, scenario, variantIds, Collections.nCopies(timestamps.size(), null),
+        return RdfDbUtil.loadVariants(db, scenario, variantIds, Collections.nCopies(timestamps.size(), null), false,
                 timestamps, Collections.nCopies(timestamps.size(), ""), List.of(), importParameters(), null, false);
     }
 
@@ -175,20 +175,20 @@ class RdfDbUtilVariantsTest {
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
             aDay(db);
             ingest(db, S, timestampFiles("t0830-v2", 1.25, T0830, false), 2, T0830);
-            assertThat(RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), S, 1,
+            assertThat(RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), S, "1",
                     null, NL, List.of(), importParameters(), null)).isNotEmpty();
 
-            Network oneTree = RdfDbUtil.loadVariants(db, S, List.of("", ""), List.of(1, 1), List.of(T0815, T0845),
+            Network oneTree = RdfDbUtil.loadVariants(db, S, List.of("", ""), List.of("1", "1"), false, List.of(T0815, T0845),
                     List.of(BE, BE), List.of(), importParameters(), null, false);
             assertThat(oneTree.getVariantManager().getVariantIds()).containsExactlyInAnyOrder("InitialState",
                     T0815, T0845);
 
-            Network oneInstant = RdfDbUtil.loadVariants(db, S, List.of("", ""), List.of(1, 2), List.of(T0830, T0830),
+            Network oneInstant = RdfDbUtil.loadVariants(db, S, List.of("", ""), List.of("1", "2"), false, List.of(T0830, T0830),
                     List.of(BE, BE), List.of(), importParameters(), null, false);
             assertThat(oneInstant.getVariantManager().getVariantIds()).containsExactlyInAnyOrder("InitialState",
                     "1@" + T0830, "2@" + T0830);
 
-            Network twoTrees = RdfDbUtil.loadVariants(db, S, List.of("", ""), List.of(1, 1), List.of(BASE, BASE),
+            Network twoTrees = RdfDbUtil.loadVariants(db, S, List.of("", ""), List.of("1", "1"), false, List.of(BASE, BASE),
                     List.of(NL, BE), List.of(), importParameters(), null, false);
             assertThat(byVariant(twoTrees)).as("the second tree is out of reach of a difference, so it is refused")
                     .containsKeys(NL + "/1@" + BASE + "/bound", BE + "/1@" + BASE + "/refused");
@@ -259,10 +259,9 @@ class RdfDbUtilVariantsTest {
             recording.stop();
 
             List<RdfDbUtil.VariantExportRow> rows =
-                    RdfDbUtil.exportRecordingPerVariant(recording, db, S, 2, Map.of());
-            assertEquals(List.of("variant", "snapshot", "modelling_authority", "timestamp", "version", "models",
-                    "exported_events",
-                    "rejected"), columns(RdfDbUtil.variantExportMapper(), rows));
+                    RdfDbUtil.exportRecordingPerVariant(recording, db, S, "2", Map.of());
+            assertEquals(List.of("variant", "snapshot", "modelling_authority", "timestamp", "version", "rank",
+                    "models", "exported_events", "rejected"), columns(RdfDbUtil.variantExportMapper(), rows));
             assertThat(rows).hasSize(2);
             assertThat(rows).allMatch(row -> "2".equals(row.version()) && BE.equals(row.modellingAuthority()));
             assertThat(rows.stream().map(RdfDbUtil.VariantExportRow::variant).toList())
@@ -305,7 +304,7 @@ class RdfDbUtilVariantsTest {
                     Map.of(RdfDbUtil.VARIANT, T0845)))
                     .isInstanceOf(PowsyblException.class)
                     .hasMessageContaining("never crosses scenarios");
-            assertThatThrownBy(() -> RdfDbUtil.exportRecordingPerVariant(recording, db, S, 3,
+            assertThatThrownBy(() -> RdfDbUtil.exportRecordingPerVariant(recording, db, S, "3",
                     Map.of(RdfDbUtil.VARIANT, T0845)))
                     .isInstanceOf(PowsyblException.class)
                     .hasMessageContaining("takes no 'variant' option");
@@ -322,14 +321,14 @@ class RdfDbUtilVariantsTest {
             assertThatThrownBy(() -> loadVariants(db, S, List.of(""), List.of(T0815, T0830)))
                     .isInstanceOf(PowsyblException.class)
                     .hasMessageContaining("must be as many");
-            assertThatThrownBy(() -> RdfDbUtil.loadVariants(db, S, List.of(""), List.of(1), List.of(T0815),
+            assertThatThrownBy(() -> RdfDbUtil.loadVariants(db, S, List.of(""), List.of("1"), false, List.of(T0815),
                     List.of("", ""), List.of(), importParameters(), null, false))
                     .isInstanceOf(PowsyblException.class)
                     .hasMessageContaining("must be as many");
             assertThatThrownBy(() -> loadVariants(db, " ", List.of(""), List.of(T0815)))
                     .isInstanceOf(PowsyblException.class)
                     .hasMessageContaining("must not be blank");
-            assertThatThrownBy(() -> RdfDbUtil.loadVariants(db, S, List.of(""), List.of(1), List.of(T0815),
+            assertThatThrownBy(() -> RdfDbUtil.loadVariants(db, S, List.of(""), List.of("1"), false, List.of(T0815),
                     List.of(""), List.of("XX"), importParameters(), null, false))
                     .isInstanceOf(PowsyblException.class)
                     .hasMessageContaining("Unknown CGMES profile 'XX'");
@@ -426,7 +425,7 @@ class RdfDbUtilVariantsTest {
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
             ingest(db, "plain", RdfDbUtilTest.microGridBe(), null, null);
             Network network = load(db, "plain", null, null);
-            assertThatThrownBy(() -> RdfDbUtil.update(network, db, "plain", null, null, null, List.of("SSH"),
+            assertThatThrownBy(() -> RdfDbUtil.update(network, db, "plain", null, false, null, null, List.of("SSH"),
                     Map.of(RdfDbUtil.VARIANT, "v"), importParameters(), null))
                     .isInstanceOf(PowsyblException.class)
                     .hasMessageContaining("holds no snapshot, so there is nothing for variant 'v' to stand for");
@@ -439,10 +438,10 @@ class RdfDbUtilVariantsTest {
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
             aDay(db);
             Network network = load(db, S, 1, null);
-            RdfDbUtil.UpdateOutcome outcome = RdfDbUtil.update(network, db, S, 1, T0830, null,
+            RdfDbUtil.UpdateOutcome outcome = RdfDbUtil.update(network, db, S, "1", false, T0830, null,
                     List.of("EQ", "SSH"), Map.of(RdfDbUtil.VARIANT, "study"), importParameters(), null);
             assertEquals("diff", RdfDbUtil.updateInfo(outcome).get(RdfDbUtil.ROUTE));
-            assertThatThrownBy(() -> RdfDbUtil.update(network, db, S, 1, T0845, null, List.of("XX"), Map.of(),
+            assertThatThrownBy(() -> RdfDbUtil.update(network, db, S, "1", false, T0845, null, List.of("XX"), Map.of(),
                     importParameters(), null))
                     .isInstanceOf(PowsyblException.class)
                     .hasMessageContaining("Unknown CGMES profile 'XX'");

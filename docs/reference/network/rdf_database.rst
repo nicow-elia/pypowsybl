@@ -5,3 +5,6 @@ pypowsybl.network.RdfDatabase
 
 .. autoclass:: RdfDatabase
     :members:
+
+.. autoclass:: VersionRegistry
+    :members:

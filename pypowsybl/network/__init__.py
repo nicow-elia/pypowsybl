@@ -16,6 +16,7 @@ from .impl.network_event_recorder import NetworkEventRecorder
 from .impl.rdf_db import (
     RdfDatabase,
     RdfDbVariantRefusedError,
+    VersionRegistry,
     connect_rdf_db,
     connect,
     from_rdf_db,

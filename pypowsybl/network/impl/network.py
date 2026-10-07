@@ -61,7 +61,7 @@ from .rdf_db import (
     _split_reasons,
     _timestamp_to_str,
     _typed,
-    _version_to_int,
+    _version_to_str,
 )
 from .sld_profile import SldProfile
 from .svg import Svg
@@ -325,9 +325,10 @@ class Network:  # pylint: disable=too-many-public-methods
         buffer.seek(0)
         self.update_from_binary_buffers([buffer], parameters, post_processors, report_node)
 
-    def update_from_rdf_db(self, db: 'RdfDatabase', scenario: str, version: Optional[int] = None,
+    def update_from_rdf_db(self, db: 'RdfDatabase', scenario: str, version: Optional[str] = None,
                            timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
-                           profiles: Optional[Sequence[Profile]] = None, *, variant: Optional[str] = None,
+                           profiles: Optional[Sequence[Profile]] = None, *, exact: bool = False,
+                           variant: Optional[str] = None,
                            parameters: Optional[Dict[str, str]] = None,
                            report_node: Optional[ReportNode] = None, max_diff_chain: int = 200) -> str:
         """
@@ -358,7 +359,8 @@ class Network:  # pylint: disable=too-many-public-methods
            db:             an open connection, see :func:`pypowsybl.network.connect_rdf_db`
            scenario:       the base scenario (grid model / day) to bring the network to, for instance
                            ``"2021-02-09"``; required, never guessed
-           version:        the snapshot version, an ``int``; ``None`` for the newest one
+           version:        the snapshot version, a name; ``None`` for the newest one, a name the highest ranking
+                           version at or below it
            timestamp:      the moment, a timezone-aware :class:`datetime.datetime`; ``None`` is the base timestamp
            modelling_authority: the tree of the target; ``None`` for the only one of the scenario
            profiles:       the CGMES profiles the update looks at, see :data:`pypowsybl.network.Profile`. On a
@@ -366,6 +368,7 @@ class Network:  # pylint: disable=too-many-public-methods
                            identified by (``None``: ``EQ`` and ``SSH``). On an **un-versioned** scenario, with
                            nothing addressed, they are the profiles replaced from the stored graphs (``None``: the
                            steady-state pair) - the legacy profile replacement, which answers ``'update'``
+           exact:          bring the network to exactly ``version``; a timestamp that does not hold it is an error
            variant:        create or update **one variant** so that it stands for the snapshot, leaving every other
                            variant of the network - and the working variant of the caller - exactly as it is. A
                            variant that does not exist is created by cloning the one nearest to the target; a
@@ -389,8 +392,8 @@ class Network:  # pylint: disable=too-many-public-methods
             only thing that can happen is that the profiles are replaced from the graphs that are stored there.
 
         Raises:
-            TypeError: a naive ``timestamp``, or a ``version`` that is not an int
-            ValueError: ``max_diff_chain`` is smaller than 1, or an unknown profile
+            TypeError: a naive ``timestamp``, or a ``version`` that is not a str
+            ValueError: ``max_diff_chain`` is smaller than 1, an unknown profile, or ``exact`` without a version
             pypowsybl.network.RdfDbVariantRefusedError: the snapshot cannot be reached inside a variant; the
                 network and all of its variants are exactly as they were
             pypowsybl.PyPowsyblError: the scenario or the snapshot does not exist, or the database cannot be reached
@@ -399,17 +402,20 @@ class Network:  # pylint: disable=too-many-public-methods
             .. code-block:: python
 
                 t = datetime(2021, 2, 9, 8, 30, tzinfo=timezone.utc)
-                network.update_from_rdf_db(db, '2021-02-09', 3, t)
-                network.update_from_rdf_db(db, '2021-02-09', 3, t + timedelta(minutes=30), variant='09:00')
+                network.update_from_rdf_db(db, '2021-02-09', '3', t)
+                network.update_from_rdf_db(db, '2021-02-09', '3', t + timedelta(minutes=30), variant='09:00')
         """
         _check_scenario(scenario)
         if max_diff_chain < 1:
             raise ValueError(f'max_diff_chain is at least 1, got {max_diff_chain}')
+        if exact and version is None:
+            raise ValueError('exact=True brings the network to exactly the named version: give a version')
         options = {'max_diff_chain': str(max_diff_chain)}
         if variant is not None:
             options['variant'] = _check_variant(variant)
         outcome = _pp.update_network_from_rdf_db(self._handle, db._check_open(),  # pylint: disable=protected-access
-                                                 scenario, _version_to_int(version), _timestamp_to_str(timestamp),
+                                                 scenario, _version_to_str(version), exact,
+                                                 _timestamp_to_str(timestamp),
                                                  _authority_to_str(modelling_authority), _profiles_to_list(profiles),
                                                  options, {} if parameters is None else parameters,
                                                  _report_handle(report_node))
@@ -451,7 +457,7 @@ class Network:  # pylint: disable=too-many-public-methods
 
         Returns:
             a dictionary that may hold ``scenario``, ``snapshot`` (the snapshot IRI), ``modelling_authority``,
-            ``timestamp`` (ISO-8601 instant), ``version`` (the integer as text) and one entry per CGMES profile (``'EQ'``, ``'SSH'``, ...) naming the model it is at. Empty
+            ``timestamp`` (ISO-8601 instant), ``version`` (the version name) and one entry per CGMES profile (``'EQ'``, ``'SSH'``, ...) naming the model it is at. Empty
             when the network has no CGMES identity at all.
 
         Raises:
@@ -473,8 +479,8 @@ class Network:  # pylint: disable=too-many-public-methods
 
         Returns:
             a dataframe indexed by ``variant`` with the columns ``scenario``, ``snapshot`` (the snapshot IRI),
-            ``modelling_authority``, ``timestamp`` (``datetime64[ns, UTC]``), ``version`` (nullable ``Int64``:
-            ``<NA>`` for a variant that stands for no snapshot), ``cloned_from``, ``eq`` and ``ssh`` (the stored
+            ``modelling_authority``, ``timestamp`` (``datetime64[ns, UTC]``), ``version`` (the name, ``None`` for a
+            variant that stands for no snapshot), ``cloned_from``, ``eq`` and ``ssh`` (the stored
             model the variant is at), ``case_date``, ``status`` and ``reasons``.
 
             ``status`` is ``primary`` for the network's own identity (``'InitialState'``), ``bound`` for a variant
@@ -498,7 +504,7 @@ class Network:  # pylint: disable=too-many-public-methods
         Examples:
             .. code-block:: python
 
-                day = pp.network.from_rdf_db(db, '2021-02-09', 1, timestamps=[t, t + timedelta(minutes=15)])
+                day = pp.network.from_rdf_db(db, '2021-02-09', '1', timestamps=[t, t + timedelta(minutes=15)])
                 day.variants_binding()[['timestamp', 'version', 'status']]
         """
         return _typed(create_data_frame_from_series_array(_pp.get_network_rdf_db_variants(self._handle)))

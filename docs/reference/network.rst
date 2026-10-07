@@ -393,6 +393,7 @@ CGMES instance files can be read once into a SPARQL graph database and turned in
    :nosignatures:
 
     RdfDatabase
+    VersionRegistry
     RdfDbVariantRefusedError
 
 .. include it in the toctree

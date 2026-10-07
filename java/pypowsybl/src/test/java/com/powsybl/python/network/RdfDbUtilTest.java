@@ -28,11 +28,11 @@ import java.io.ByteArrayOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Properties;
+import java.util.Set;
 import java.util.UUID;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -218,7 +218,7 @@ class RdfDbUtilTest {
             RdfDbUtil.loadCgmes(db, microGridBe(), SCENARIO, null, "2014-06-01T10:30:00Z", null, List.of(),
                     importParameters(), null);
             assertThat(RdfDbUtil.snapshots(db, SCENARIO)).singleElement()
-                    .satisfies(root -> assertEquals(1, root.version()));
+                    .satisfies(root -> assertEquals("1", root.version()));
         }
     }
 
@@ -236,9 +236,8 @@ class RdfDbUtilTest {
 
     @Test
     void profileNamesAreTranslatedAndUnknownOnesAreNamedInTheError() {
-        assertEquals(EnumSet.of(CgmesSubset.STEADY_STATE_HYPOTHESIS, CgmesSubset.STATE_VARIABLES),
-                RdfDbUtil.toProfiles(List.of("ssh", " SV ")));
-        assertEquals(EnumSet.of(CgmesSubset.EQUIPMENT_BOUNDARY), RdfDbUtil.toProfiles(List.of("EQ_BD")));
+        assertEquals(Set.of("SSH", "SV"), RdfDbUtil.toProfiles(List.of("ssh", " SV ")));
+        assertEquals(Set.of("EQ_BD"), RdfDbUtil.toProfiles(List.of("EQ_BD")));
         assertEquals(null, RdfDbUtil.toProfiles(List.of()), "none named is the default of the call");
         assertThatThrownBy(() -> RdfDbUtil.toProfiles(List.of("NOPE")))
                 .isInstanceOf(RdfDbException.class)

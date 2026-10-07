@@ -423,30 +423,30 @@ def test_vsc_moves_between_voltage_and_reactive_power_through_the_database_and_b
     folder.mkdir()
     pp.network.create_four_substations_node_breaker_network().save(str(folder / 'four'), format='CGMES')
     with pp.network.connect_rdf_db(rdf_db_url) as db:
-        db.load_cgmes(folder, scenario, 1, parameters=DB_PARAMETERS)
-        sender = pp.network.from_rdf_db(db, scenario, 1, parameters=DB_PARAMETERS)
-        states = {1: _vsc_columns(sender)}
-        for version, update in ((2, {'voltage_regulator_on': False, 'target_q': 33.0}),
-                                (3, {'target_v': 401.0, 'voltage_regulator_on': True})):
+        db.load_cgmes(folder, scenario, '1', parameters=DB_PARAMETERS)
+        sender = pp.network.from_rdf_db(db, scenario, '1', parameters=DB_PARAMETERS)
+        states = {'1': _vsc_columns(sender)}
+        for version, update in (('2', {'voltage_regulator_on': False, 'target_q': 33.0}),
+                                ('3', {'target_v': 401.0, 'voltage_regulator_on': True})):
             with sender.event_recorder() as recorder:
                 sender.update_vsc_converter_stations(id='VSC1', **update)
                 assert recorder.to_rdf_updates(db, scenario, version)
             states[version] = _vsc_columns(sender)
         assert row(sender.get_vsc_converter_stations(), 'VSC1') == [401.0, 33.0, True, 'VSC1']
-        assert row(states[2], 'VSC1') == [400.0, 33.0, False, 'VSC1']
+        assert row(states['2'], 'VSC1') == [400.0, 33.0, False, 'VSC1']
 
-        receiver = pp.network.from_rdf_db(db, scenario, 1, parameters=DB_PARAMETERS)
-        for version in (2, 3):
+        receiver = pp.network.from_rdf_db(db, scenario, '1', parameters=DB_PARAMETERS)
+        for version in ('2', '3'):
             assert receiver.update_from_rdf_db(db, scenario, version) == 'diff'
             pd.testing.assert_frame_equal(_vsc_columns(receiver), states[version], obj=f'VSC stations at {version}')
 
         # backwards: the station returns to reactive power regulation with its reactive target; its voltage target,
         # inactive in that mode, is not read by the CGMES update (core, review 21 R2-6 b), so the receiver keeps the
         # 401 of version 3 instead of the 400 of version 2 - pinned until core reads it
-        assert receiver.update_from_rdf_db(db, scenario, 2) == 'diff'
+        assert receiver.update_from_rdf_db(db, scenario, '2') == 'diff'
         columns = ['target_q', 'voltage_regulator_on', 'regulated_element_id']
-        pd.testing.assert_frame_equal(_vsc_columns(receiver, columns), states[2][columns], obj='VSC stations at version 2')
+        pd.testing.assert_frame_equal(_vsc_columns(receiver, columns), states['2'][columns], obj='VSC stations at version 2')
         assert receiver.get_vsc_converter_stations().loc['VSC1', 'target_v'] == 401.0
 
-        assert receiver.update_from_rdf_db(db, scenario, 1) == 'diff'
-        pd.testing.assert_frame_equal(_vsc_columns(receiver), states[1], obj='VSC stations at version 1')
+        assert receiver.update_from_rdf_db(db, scenario, '1') == 'diff'
+        pd.testing.assert_frame_equal(_vsc_columns(receiver), states['1'], obj='VSC stations at version 1')

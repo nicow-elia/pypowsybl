@@ -109,7 +109,7 @@ class RdfDbUtilVersionedFusekiTest extends AbstractFusekiTest {
             Network network = root(db, scenario);
             record(db, network, scenario, 1, T0830, 50.0);
 
-            String iri = RdfDbUtil.checkpoint(db, scenario, 1, T0830, null);
+            String iri = RdfDbUtil.checkpoint(db, scenario, "1", T0830, null);
             assertThat(RdfDbUtil.snapshots(db, scenario))
                     .filteredOn(info -> info.iri().equals(iri))
                     .allMatch(SnapshotInfo::hasFull);

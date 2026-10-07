@@ -195,8 +195,8 @@ address, written in this order everywhere:
      - ``str``, required
      - not allowed: the scenario is never guessed
    * - ``version``
-     - ``int``, at least 1
-     - the newest version (a read), the next one (a write)
+     - ``str``, a name the scenario's version registry ranks (``'1'``, ``'DA'``)
+     - the newest version (a read), the next registered one (a write)
    * - ``timestamp``
      - timezone-aware :class:`datetime.datetime`
      - the base timestamp of the tree
@@ -210,9 +210,15 @@ A **timestamp** is an instant. Pass an aware datetime - ``datetime(2021, 2, 9, 2
 the same moment in any other zone; a naive datetime names no instant and raises :class:`TypeError`. The dataframes
 answer in UTC (``datetime64[ns, UTC]``); showing a moment in a local zone is the caller's choice.
 
-A **version** is an ``int``. Versions of one timestamp only grow: a write without a version gets the head's plus one
-(1 on a new timestamp), and an explicit one must be greater than the head's - gaps are allowed, so an operator may
-number ``10, 20, 30``. The ``md:Model.version`` of the CGMES headers is unrelated to it.
+A **version** is a name - ``'1'``, ``'2'``, or ``'DA'``, ``'ID'``, ``'RT'`` for day-ahead, intraday and real time -
+and the scenario's **version registry** gives every name a *rank* (see `The version registry`_ below). Versions are
+compared by rank, never by name: the versions of one timestamp only grow upwards in rank, and a **read at a name
+takes the highest ranking version at or below it** that the timestamp holds - ``'RT'`` at a moment that only went as
+far as ``'ID'`` is that ``'ID'``. ``exact=True`` on :func:`from_rdf_db` and :meth:`Network.update_from_rdf_db` takes
+that version or nothing. A write without a version takes the lowest registered name ranking above the head; a
+scenario whose registry is permissive (the default, see below) appends an unregistered name on top, so writing
+``'1'``, ``'2'``, ``'3'`` in that order just works. An int is refused (``TypeError: version is a name``). The
+``md:Model.version`` of the CGMES headers is unrelated to it.
 
 A **modelling authority** is a TSO's tree. Every authority of a scenario has a tree of its own - its root, its
 timestamps, its versions - and all of them share the scenario's boundary. A scenario of a single TSO, which is the
@@ -241,13 +247,14 @@ chain.
 
 How an address is written (``t`` an aware datetime):
 
-======================================  =====================================================================
-``from_rdf_db(db, s)``                  the newest version of the scenario's base timestamp
-``from_rdf_db(db, s, 2)``               version 2 of the base timestamp
-``from_rdf_db(db, s, None, t)``         the newest version of the timestamp ``t``
-``from_rdf_db(db, s, 2, t)``            exactly that study state
-``from_rdf_db(db, s, 2, t, mas)``       the same, in the tree of the modelling authority ``mas``
-======================================  =====================================================================
+===========================================  ===============================================================
+``from_rdf_db(db, s)``                       the newest version of the scenario's base timestamp
+``from_rdf_db(db, s, '2')``                  version ``'2'`` of the base timestamp, or the highest below it
+``from_rdf_db(db, s, None, t)``              the newest version of the timestamp ``t``
+``from_rdf_db(db, s, 'ID', t)``              the highest version at or below ``'ID'`` of the timestamp ``t``
+``from_rdf_db(db, s, 'ID', t, exact=True)``  exactly that study state, or an error
+``from_rdf_db(db, s, 'ID', t, mas)``         the same, in the tree of the modelling authority ``mas``
+===========================================  ===============================================================
 
 Storing changes from a recorder
 -------------------------------
@@ -269,13 +276,13 @@ Everything after that may leave it open: the scenario holds one tree.
 
     elia = 'http://elia.be/CGMES'
     with pp.network.connect('memory:demo') as db:
-        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', 1, modelling_authority=elia)
-        network = pp.network.from_rdf_db(db, '2021-02-09', 1)
+        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', '1', modelling_authority=elia)
+        network = pp.network.from_rdf_db(db, '2021-02-09', '1')
         load_id = sorted(network.get_loads().index)[0]
 
         with network.event_recorder() as recorder:
             network.update_loads(id=load_id, p0=42.0)
-            stored = recorder.to_rdf_updates(db, '2021-02-09', 1, datetime(2021, 2, 9, 20, 30, tzinfo=timezone.utc))
+            stored = recorder.to_rdf_updates(db, '2021-02-09', '1', datetime(2021, 2, 9, 20, 30, tzinfo=timezone.utc))
 
         snapshots = db.snapshots('2021-02-09')
         print(len(stored) > 0)
@@ -287,10 +294,58 @@ Everything after that may leave it open: the scenario holds one tree.
 .. testoutput::
 
     True
-    [1, 1]
+    ['1', '1']
     ['2021-02-09 19:30:00+00:00', '2021-02-09 20:30:00+00:00']
     ['diff', 'full']
     ['http://elia.be/CGMES']
+
+The version registry
+--------------------
+
+Every scenario has a **version registry**: the version names it knows, each with a *rank*. Ranks are sparse
+(10, 20, 30, ...) so that a name can later be put between two others, and they are what versions are compared by.
+:meth:`RdfDatabase.registry` returns a :class:`VersionRegistry` that reads and edits it:
+
+* :meth:`VersionRegistry.dataframe` - one row per name, lowest rank first: ``rank`` and ``transient``;
+  :attr:`VersionRegistry.names`, :meth:`VersionRegistry.rank` and :attr:`VersionRegistry.permissive` read it too;
+* :meth:`VersionRegistry.create` - the registry of a scenario that has none yet, **strict** by default: a write under
+  a name it does not hold is refused ("version 'X' is not registered in scenario 'S' (registry: [...]); register it
+  or write into a permissive scenario");
+* :meth:`VersionRegistry.add` registers a name on top, :meth:`VersionRegistry.insert` between a name and its
+  successor (at the midpoint of their ranks; refused when no integer is left - rerank first);
+* :meth:`VersionRegistry.rerank` gives names new ranks, refused when a stored version would end up at or below the
+  version it was written on;
+* :meth:`VersionRegistry.rename` renames a name no snapshot carries yet (a snapshot's IRI carries its version name,
+  so a used name keeps it; rerank to reorder);
+* :meth:`VersionRegistry.mark_transient` and :meth:`VersionRegistry.delete`: deleting a *transient* name drops every
+  snapshot that carries it - each must be one nothing was built on - which is how scratch studies are cleaned up;
+  any other name a snapshot carries is refused.
+
+A scenario whose first root is written **without** a registry gets a **permissive** one holding the root's version
+name at rank 10: a write under a name it does not hold appends that name on top. That is why the examples of this
+page never create one. Every edit is guarded by the registry's revision in the database, so an edit that lost a race
+against another writer is refused and changes nothing; a write whose registry changed in the meantime is retried by
+the library.
+
+.. testcode::
+
+    with pp.network.connect('memory:registry') as db:
+        registry = db.registry('2021-02-09')
+        registry.create(['DA', 'ID', 'RT'])
+        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', 'DA', modelling_authority=elia)
+        network = pp.network.from_rdf_db(db, '2021-02-09', 'DA')
+        with network.event_recorder() as recorder:
+            network.update_loads(id=sorted(network.get_loads().index)[0], p0=42.0)
+            recorder.to_rdf_updates(db, '2021-02-09', 'ID')
+        print(registry.dataframe()['rank'].to_dict())
+        print(pp.network.from_rdf_db(db, '2021-02-09', 'RT').rdf_db_identity()['version'])
+        print(db.versions('2021-02-09')[['version', 'rank']].values.tolist())
+
+.. testoutput::
+
+    {'DA': 10, 'ID': 20, 'RT': 30}
+    ID
+    [['DA', 10], ['ID', 20]]
 
 Ingesting a day from files
 --------------------------
@@ -302,7 +357,7 @@ with one call, naming the moment it describes::
 
     base = datetime(2021, 2, 9, 20, 0, tzinfo=timezone.utc)
     with pp.network.connect('http://localhost:3030/ds') as db:
-        db.load_cgmes('day/base.zip', '2021-02-09', 1)                       # the root
+        db.load_cgmes('day/base.zip', '2021-02-09', '1')                       # the root
         for i in range(3):
             moment = base + timedelta(minutes=15 * i)
             db.load_cgmes(f'day/{moment:%H%M}.zip', '2021-02-09', None, moment)
@@ -328,17 +383,17 @@ already in memory to one. One query decides how, and the return value names the 
 .. testcode::
 
     with pp.network.connect('memory:demo2') as db:
-        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', 1, modelling_authority=elia)
+        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', '1', modelling_authority=elia)
 
-        sender = pp.network.from_rdf_db(db, '2021-02-09', 1)
+        sender = pp.network.from_rdf_db(db, '2021-02-09', '1')
         with sender.event_recorder() as recorder:
             sender.update_loads(id=sorted(sender.get_loads().index)[0], p0=42.0)
-            recorder.to_rdf_updates(db, '2021-02-09')   # version 2: the head's plus one
+            recorder.to_rdf_updates(db, '2021-02-09')   # version '2': the next number the registry lacks
 
-        receiver = pp.network.from_rdf_db(db, '2021-02-09', 1)
-        print(receiver.update_from_rdf_db(db, '2021-02-09', 2))
-        print(receiver.update_from_rdf_db(db, '2021-02-09', 2))
-        print(receiver.update_from_rdf_db(db, '2021-02-09', 1))
+        receiver = pp.network.from_rdf_db(db, '2021-02-09', '1')
+        print(receiver.update_from_rdf_db(db, '2021-02-09', '2'))
+        print(receiver.update_from_rdf_db(db, '2021-02-09', '2'))
+        print(receiver.update_from_rdf_db(db, '2021-02-09', '1'))
         print(receiver.rdf_db_identity()['scenario'])
 
 .. testoutput::
@@ -348,7 +403,7 @@ already in memory to one. One query decides how, and the return value names the 
     diff
     2021-02-09
 
-A target in another scenario is the ``'full'`` case: ``receiver.update_from_rdf_db(db, '2021-02-10', 1)``
+A target in another scenario is the ``'full'`` case: ``receiver.update_from_rdf_db(db, '2021-02-10', '1')``
 reloads the network from that day, and ``receiver.rdf_db_identity()['scenario']`` then says ``'2021-02-10'``.
 
 What happens on a full reload
@@ -390,16 +445,16 @@ the instants even in a scenario that holds the trees of several authorities.
     t2000 = datetime(2021, 2, 9, 20, 0, tzinfo=timezone.utc)
     t2015 = t2000 + timedelta(minutes=15)
     with pp.network.connect('memory:variants') as db:
-        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', 1, modelling_authority=elia)
-        sender = pp.network.from_rdf_db(db, '2021-02-09', 1)
+        db.load_cgmes(DATA_DIR / 'CGMES_Full.zip', '2021-02-09', '1', modelling_authority=elia)
+        sender = pp.network.from_rdf_db(db, '2021-02-09', '1')
         load_id = sorted(sender.get_loads().index)[0]
         for moment, value in [(t2000, 42.0), (t2015, 84.0)]:
-            sender.update_from_rdf_db(db, '2021-02-09', 1)
+            sender.update_from_rdf_db(db, '2021-02-09', '1')
             with sender.event_recorder() as recorder:
                 sender.update_loads(id=load_id, p0=value)
-                recorder.to_rdf_updates(db, '2021-02-09', 1, moment)
+                recorder.to_rdf_updates(db, '2021-02-09', '1', moment)
 
-        day = pp.network.from_rdf_db(db, '2021-02-09', 1, timestamps=[t2000, t2015])
+        day = pp.network.from_rdf_db(db, '2021-02-09', '1', timestamps=[t2000, t2015])
         print(sorted(day.get_variant_ids()))
         print(list(day.variants_binding()['status']))
         for variant in ['2021-02-09T20:00:00Z', '2021-02-09T20:15:00Z']:
@@ -431,14 +486,14 @@ snapshot, leaving every other variant - and the working variant of the caller - 
 exist is created by cloning the one nearest to the target in difference terms; a variant that exists is moved from
 wherever it stands. The answers are the familiar ``'noop'`` and ``'diff'``::
 
-    day.update_from_rdf_db(db, '2021-02-09', 1, t2030, variant='study')   # created
-    day.update_from_rdf_db(db, '2021-02-09', 2, t2030, variant='study')   # moved
+    day.update_from_rdf_db(db, '2021-02-09', '1', t2030, variant='study')   # created
+    day.update_from_rdf_db(db, '2021-02-09', '2', t2030, variant='study')   # moved
 
 The route describes the **difference**, not whether anything happened: with ``variant=``, a ``'noop'`` still
 creates the variant when it did not exist, by cloning one that already stands for the target. Ask
 :meth:`Network.variants_binding` or :meth:`Network.get_variant_ids`, not the route, to learn what is there::
 
-    day.update_from_rdf_db(db, '2021-02-09', 1, t2030, variant='copy')    # 'noop', and 'copy' now exists
+    day.update_from_rdf_db(db, '2021-02-09', '1', t2030, variant='copy')    # 'noop', and 'copy' now exists
 
 Variant mode is an explicit opt-in with exactly three doors: :func:`from_rdf_db` with ``timestamps=``/
 ``variants=``, :meth:`Network.update_from_rdf_db` with ``variant=``, and
@@ -469,10 +524,10 @@ bindings are exactly as they were.
 .. code-block:: python
 
     try:
-        day.update_from_rdf_db(db, '2021-02-09', 1, t2100, variant='21:00')
+        day.update_from_rdf_db(db, '2021-02-09', '1', t2100, variant='21:00')
     except pp.network.RdfDbVariantRefusedError as refusal:
         print(refusal.variant, refusal.reasons)
-        drifted = pp.network.from_rdf_db(db, '2021-02-09', 1, t2100)   # a network of its own
+        drifted = pp.network.from_rdf_db(db, '2021-02-09', '1', t2100)   # a network of its own
 
 What is per variant and what is not:
 
@@ -522,10 +577,10 @@ variant the changes were recorded on and answers with a dataframe::
             day.set_working_variant(variant)
             day.update_loads(id=load_id, p0=100.0)
         day.set_working_variant('InitialState')
-    written = recorder.to_rdf_updates(db, '2021-02-09', 2, per_variant=True)
+    written = recorder.to_rdf_updates(db, '2021-02-09', '2', per_variant=True)
 
 The timestamp and the modelling authority of such a write are the variant's own and must not be given; ``version``
-still names the version the new snapshots get (``None``: each chain's head plus one). Everything that can refuse happens before anything is written, so an unsupported change under
+still names the version the new snapshots get (``None``: the next registered name above each chain's head). Everything that can refuse happens before anything is written, so an unsupported change under
 ``unsupported='raise'`` leaves the database untouched. Both forms **opt the network into variant mode**.
 
 On a network that is already in variant mode, a plain ``to_rdf_updates`` without ``variant=`` is a variant
@@ -574,12 +629,14 @@ explicitly.
 The catalogue
 -------------
 
-Six views, all dataframes: :meth:`RdfDatabase.scenarios` (the days in the database, with the modelling authorities
-each holds), :meth:`RdfDatabase.snapshots`, :meth:`RdfDatabase.versions` (one timestamp's chain),
+Seven views, all dataframes: :meth:`RdfDatabase.scenarios` (the days in the database, with the modelling
+authorities each holds), :meth:`RdfDatabase.snapshots`, :meth:`RdfDatabase.versions` (one timestamp's chain),
 :meth:`RdfDatabase.timestamps` (one authority's tree), :meth:`RdfDatabase.assembly` (every authority at one
-moment) and :meth:`RdfDatabase.models` (the stored CGMES models, with the chain each difference belongs to);
-:meth:`RdfDatabase.modelling_authorities` lists the trees of a scenario. ``timestamp`` columns are
-``datetime64[ns, UTC]`` and ``version`` columns ``int64``. A scenario the database does not hold gives an empty
+moment), :meth:`RdfDatabase.models` (the stored CGMES models, with the chain each difference belongs to) and
+:meth:`VersionRegistry.dataframe` (the version names of a scenario); :meth:`RdfDatabase.modelling_authorities`
+lists the trees of a scenario. ``timestamp`` columns are ``datetime64[ns, UTC]``, ``version`` columns hold the
+version name (``str``) and every table that has one carries the ``rank`` the registry gives it (``int64``,
+nullable where a row may stand for no snapshot). A scenario the database does not hold gives an empty
 frame with the documented columns rather than an error.
 
 Checkpoints
@@ -689,12 +746,14 @@ Limitations
   ingested.
 * The un-versioned upload (``load_cgmes`` without an address) is refused on a scenario that holds snapshots: its
   instance files belong to a snapshot and are never overwritten.
-* The version chain of a timestamp is **linear**: one successor per snapshot, and versions only grow. A writer
-  whose network is not at the head is refused and has to reload the head and record again.
+* The version chain of a timestamp is **linear**: one successor per snapshot, and versions only grow in rank. A
+  writer whose network is not at the head is refused and has to reload the head and record again.
+* A version name a snapshot carries cannot be renamed (the snapshot's IRI carries it); rerank to change the order.
 * One base day per scenario. Several days are several scenarios, and a walk from one to another is a full reload,
   never a difference - so "23:45 of day one to 00:00 of day two" is not a diff.
-* Stores written before the addressing became ``(scenario, version, timestamp, modelling_authority)`` are refused
-  with a message saying so; there is no migration - clear the scenario and ingest it again.
+* Stores written before the addressing became ``(scenario, version, timestamp, modelling_authority)``, and stores
+  of an older layout (schema 3, integer versions), are refused with a message saying so; there is no migration -
+  clear the scenario and ingest it again.
 * ``query_mode='remote'`` cannot read a scenario that holds differences or snapshots.
 * Variants are lost on a full reload, and recorders created before one are refused (see above).
 * ``post_processors`` are only honoured when nothing is addressed and no ``profiles`` are given; the snapshot entry
