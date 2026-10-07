@@ -517,9 +517,11 @@ class RdfDatabase:
             timestamp: the moment the files describe, a timezone-aware datetime. ``None`` is the base timestamp,
                 which for a root is taken from ``md:Model.scenarioTime`` of the steady state file
             modelling_authority: the tree the files belong to. ``None`` is the only tree of a scenario that holds
-                one, whatever the files' headers state; for the first root of a scenario, or a scenario of several
-                trees, it is the authority the equipment and steady state hypothesis headers agree on (refused when
-                they do not). Adding the tree of a *second* authority to a versioned scenario names it
+                one, whatever the files' headers state - unless their equipment and steady state hypothesis agree on
+                another authority: such files are refused, to be named either way; for the first root of a scenario,
+                or a scenario of several trees, it is the authority the equipment and steady state hypothesis
+                headers agree on (refused when they do not). Adding the tree of a *second* authority to a versioned
+                scenario names it
             profiles: for a root, the profiles to store (``None``: every profile the files carry); for a further
                 snapshot, the profiles to compare (``None``: ``EQ`` and ``SSH``)
             parameters: a dictionary of CGMES import parameters; only the ones that influence how identifiers are

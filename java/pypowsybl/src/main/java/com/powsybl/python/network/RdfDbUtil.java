@@ -73,8 +73,9 @@ import java.util.stream.Collectors;
  * its files), a <em>timestamp</em> (an ISO-8601 instant on the C API) and an integer <em>version</em>; each may be
  * left open, which means "the only modelling authority of the scenario", "the base timestamp of its tree" and "the
  * newest version" respectively. Core requires the authority on every read; resolving an open one when the scenario
- * holds exactly one is the convenience of these bindings ({@link #authority}), and so is resolving it for a write
- * into such a scenario ({@link #onlyAuthority}). The <em>profiles</em> are not part of
+ * holds exactly one is the convenience of these bindings ({@link #authority}), and so is resolving it for a recorder
+ * export or a checkpoint into such a scenario ({@link #onlyAuthority}); core resolves it for files, whose headers it
+ * reads. The <em>profiles</em> are not part of
  * the address: they select which CGMES profiles a call reads or writes. A scenario that holds no snapshot at all is
  * <em>unversioned</em>, and then nothing may be addressed in it.</p>
  *
@@ -427,9 +428,10 @@ public final class RdfDbUtil {
     /**
      * The modelling authority a write is addressed to: the named one, else the only tree of the scenario, else none.
      *
-     * <p>A write into a scenario of one tree goes into that tree, as a read does - whatever its files' headers or the
-     * network's provenance say. Where there is no single tree - the first root of a scenario, or a scenario of
-     * several - the open authority is passed on, and core takes it from the files or from the network.</p>
+     * <p>A write of recorded changes or a checkpoint into a scenario of one tree goes into that tree, as a read does -
+     * whatever the network's provenance says. Where there is no single tree - the first root of a scenario, or a
+     * scenario of several - the open authority is passed on, and core takes it from the network. Files are not
+     * resolved here: core applies the same rule to them and also reads their headers (see {@link #loadCgmes}).</p>
      *
      * @param catalog   the snapshots of the scenario
      * @param authority the authority the caller named, {@code null} or blank for none
@@ -788,10 +790,12 @@ public final class RdfDbUtil {
      * ({@code SnapshotCatalog.putAsDiff}). That is how a day of timestamps exported by a TSO reaches the database
      * without anyone recording anything.</p>
      *
-     * <p>The tree is the named one, or - when none is named - the only one of the scenario
-     * ({@link #onlyAuthority}), whatever the files' headers state. Adding the tree of a second authority to a
-     * scenario therefore names it; only the first root of a scenario, or a further snapshot of a scenario of several
-     * trees, takes the authority from the files.</p>
+     * <p>The tree is the named one, or - when none is named - the only one of the scenario, which core resolves
+     * while it reads the files' headers: whatever they state, unless their equipment and steady state hypothesis
+     * agree on <em>another</em> authority - another TSO's files, refused with "pass Y in the address to store them
+     * under it, or X to open a second tree". Adding the tree of a second authority to a scenario therefore names it;
+     * only the first root of a scenario, or a further snapshot of a scenario of several trees, takes the authority
+     * from the files.</p>
      *
      * @param db                 the open connection
      * @param ds                 the data source holding the instance files
@@ -799,8 +803,9 @@ public final class RdfDbUtil {
      * @param version            the version of the snapshot, {@code null} for the head's plus one (1 for a root)
      * @param timestamp          the moment the files describe; {@code null} or empty for the base timestamp, which
      *                           for a root is taken from the steady state file
-     * @param modellingAuthority the modelling authority, {@code null} or empty for the only one of the scenario, or
-     *                           - when it holds none or several - to take it from the files
+     * @param modellingAuthority the modelling authority, {@code null} or empty for the only one of the scenario
+     *                           (refused for files agreeing on another), or - when it holds none or several - to
+     *                           take it from the files
      * @param profiles           the profiles to store (a root) or to compare (a further snapshot), empty for the
      *                           default of each
      * @param parameters         the CGMES import parameters
@@ -825,9 +830,8 @@ public final class RdfDbUtil {
         SnapshotCatalog catalog = db.snapshots(scenario);
         Properties props = toProperties(parameters);
         ReportNode rn = orNoOp(reportNode);
-        String tree = onlyAuthority(catalog, authority);
-        SnapshotRef ref = SnapshotRef.of(scenario, tree, moment, version);
-        boolean hasRoot = tree == null ? catalog.isVersioned() : catalog.root(tree).isPresent();
+        SnapshotRef ref = SnapshotRef.of(scenario, authority, moment, version);
+        boolean hasRoot = authority == null ? catalog.isVersioned() : catalog.root(authority).isPresent();
         SnapshotInfo written = hasRoot
                 ? catalog.putAsDiff(ds, null, ref, projection, props, rn)
                 : catalog.putFull(ds, null, ref, projection, props, rn);

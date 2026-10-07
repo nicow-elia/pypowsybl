@@ -255,7 +255,9 @@ Storing changes from a recorder
 One snapshot is stored under one modelling authority; the files it carries may come from several. A write that
 names the authority takes it whatever the files state. One that leaves it open writes into the scenario's tree
 when the scenario holds exactly one, as a read does - a further set of files, a recorder's changes and a
-checkpoint alike. Where there is no single tree - the first root of a scenario, or a scenario of several - it
+checkpoint alike; files whose equipment and steady state hypothesis agree on *another* authority are refused
+there ("... state modelling authority X but the scenario's only tree is Y: pass Y in the address to store them
+under it, or X to open a second tree"). Where there is no single tree - the first root of a scenario, or a scenario of several - it
 takes the authority the equipment and the steady state hypothesis files agree on, and is refused otherwise,
 naming the authority of every profile. ``data/CGMES_Full.zip`` is such a case - its EQ and TP say
 ``powsybl.org``, its SSH Elia, its SV TenneT - so the examples below name Elia when they store a root.

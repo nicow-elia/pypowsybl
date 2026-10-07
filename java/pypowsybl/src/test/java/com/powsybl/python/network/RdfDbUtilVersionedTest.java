@@ -152,7 +152,8 @@ class RdfDbUtilVersionedTest {
     /**
      * A write into a scenario that holds exactly one tree resolves an open modelling authority to that tree, as a
      * read does - an ingestion ({@code putAsDiff}), an export ({@code putDiff}) and a checkpoint alike, even when the
-     * files' headers disagree or the network is at no snapshot of the database. The first root of a scenario has no
+     * files' headers disagree or the network is at no snapshot of the database - but not files whose headers agree on
+     * another authority, which are refused. The first root of a scenario has no
      * tree to resolve to, and a scenario of several trees no single one: there the files (or the network) decide.
      *
      * @param scenario a scenario of its own, empty
@@ -173,6 +174,14 @@ class RdfDbUtilVersionedTest {
         assertThat(exportLoad(db, fromFiles, scenario, T0845, 44.0)).isNotEmpty();
         String checkpoint = RdfDbUtil.checkpoint(db, scenario, null, T0845, null);
 
+        assertThatThrownBy(() -> ingest(db, scenario, CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(),
+                null, T0930))
+                .as("files that agree on another authority are another TSO's: neither diffed into BE's tree nor a"
+                        + " second tree unless named")
+                .isInstanceOf(PowsyblException.class)
+                .hasMessageContaining("state modelling authority " + NL + " but the scenario's only tree is " + BE
+                        + ": pass " + BE + " in the address to store them under it, or " + NL
+                        + " to open a second tree");
         assertThat(RdfDbUtil.snapshots(db, scenario)).hasSize(3)
                 .allMatch(info -> BE.equals(info.modellingAuthority()))
                 .anyMatch(info -> info.iri().equals(checkpoint) && info.hasFull());

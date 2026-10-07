@@ -96,6 +96,21 @@ def other_tso_zip(suffix: str) -> io.BytesIO:
     return buffer
 
 
+def _authored_by(authority: str, suffix: str) -> io.BytesIO:
+    """:func:`other_tso_zip` with every instance file stating ``authority``: another TSO's files that agree on it."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(other_tso_zip(suffix)) as source, \
+            zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as target:
+        for entry in source.namelist():
+            content = source.read(entry).decode('utf-8')
+            if '_BD_' not in entry:
+                content = re.sub(r'(<md:Model\.modelingAuthoritySet>)[^<]*(</md:Model\.modelingAuthoritySet>)',
+                                 r'\g<1>' + authority + r'\g<2>', content)
+            target.writestr(entry, content)
+    buffer.seek(0)
+    return buffer
+
+
 def _state_variables_only(suffix: str) -> io.BytesIO:
     """The state variables file of ``CGMES_Full.zip`` alone, under a model identifier of its own."""
     buffer = io.BytesIO()
@@ -310,6 +325,30 @@ def test_a_write_into_a_scenario_of_one_tree_goes_into_that_tree(rdf_db_url: str
         assert db.timestamps(scenario).index.tolist() == [BASE, at('20:00'), at('20:30')]
         reader = pp.network.from_rdf_db(db, scenario, None, at('20:30'), parameters=PARAMS)
         assert reader.get_loads().loc[load, 'p0'] == pytest.approx(333.0)
+
+
+def test_files_agreeing_on_another_authority_are_refused_by_a_scenario_of_one_tree(rdf_db_url: str,
+                                                                                    scenario: str) -> None:
+    """
+    An open authority on a write into a scenario of one tree is that tree - unless the files' equipment and steady
+    state hypothesis agree on another authority: those are another TSO's files, refused with both ways out, and
+    nothing is stored until the address names one of them.
+    """
+    other = 'http://tennet.nl/CGMES'
+    with pp.network.connect(rdf_db_url) as db:
+        _root(db, scenario)
+        before = len(db.snapshots(scenario))
+        refusal = (f"state modelling authority {other} but the scenario's only tree is {AUTHORITY}: pass {AUTHORITY}"
+                   f" in the address to store them under it, or {other} to open a second tree")
+        for version, timestamp in ((1, None), (None, at('20:00'))):
+            with pytest.raises(PyPowsyblError, match=re.escape(refusal)):
+                db.load_cgmes_from_binary_buffers([_authored_by(other, '-' + scenario)], scenario, version,
+                                                  timestamp, parameters=PARAMS)
+        assert len(db.snapshots(scenario)) == before, 'nothing is stored'
+
+        db.load_cgmes_from_binary_buffers([_authored_by(other, '-' + scenario)], scenario, 1, None, other,
+                                          parameters=PARAMS)
+        assert sorted(set(db.snapshots(scenario)['modelling_authority'])) == sorted([AUTHORITY, other])
 
 
 def test_a_projected_load_keeps_the_boundary(rdf_db_url: str, scenario: str) -> None:
