@@ -42,6 +42,7 @@ import com.powsybl.iidm.network.ImportConfig;
 import com.powsybl.iidm.network.Network;
 import com.powsybl.iidm.network.NetworkFactory;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -66,11 +67,38 @@ import java.util.Properties;
  * a database is expected to hold many days side by side, and silently picking one of them would be a trap. Inside a
  * scenario a state is addressed by a <em>version</em> label and a <em>timestep</em>; both may be left open, which
  * means "the newest version" and "the base timestep of the scenario". A scenario that holds no snapshot at all is
- * the unversioned shape of follow-up work package 1, and then neither may be given.</p>
+ * <em>unversioned</em>, and then neither may be given.</p>
  *
  * @author Nico Westerbeck {@literal <nico.westerbeck at 50hertz.com>}
  */
 public final class RdfDbUtil {
+
+    /** Key of the route an update took in the map {@link #updateInfo} returns. */
+    public static final String ROUTE = "route";
+    /** Key of the reasons the fast route was not taken. */
+    public static final String REASONS = "reasons";
+    /** Key of how many difference models were applied. */
+    public static final String DIFF_COUNT = "diff_count";
+    /** Key of how many statements were transferred. */
+    public static final String STATEMENT_COUNT = "statement_count";
+    /** Key of the IRI of the snapshot the network is at. */
+    public static final String SNAPSHOT = "snapshot";
+    /** Key of the scenario the network belongs to. */
+    public static final String SCENARIO = "scenario";
+    /** Key of the version label the network is at. */
+    public static final String VERSION = "version";
+    /** Key of the timestep the network is at. */
+    public static final String TIMESTEP = "timestep";
+    /** Key of the variant an update created or moved, empty when the update was not a variant operation. */
+    public static final String VARIANT = "variant";
+
+    private static final String NOOP = "noop";
+    private static final String DIFF = "diff";
+    private static final String FULL = "full";
+    private static final String REFUSED = "refused";
+    private static final String LEGACY_UPDATE = "update";
+    private static final String MAX_DIFF_CHAIN = "max_diff_chain";
+    private static final String LABEL = "label";
 
     private static final DataframeMapper<List<GraphInfo>, Void> GRAPHS_MAPPER =
             new DataframeMapperBuilder<List<GraphInfo>, GraphInfo, Void>()
@@ -78,6 +106,94 @@ public final class RdfDbUtil {
                     .stringsIndex("name", GraphInfo::contextName)
                     .strings("subset", g -> g.subset().getIdentifier())
                     .strings("graph", GraphInfo::remoteGraph)
+                    .build();
+
+    private static final List<String> DATABASE_DECIDED_OPTIONS = List.of(NetworkEventRecording.VERSION,
+            NetworkEventRecording.SCENARIO_TIME, NetworkEventRecording.SUPERSEDES, NetworkEventRecording.DEPENDS_ON);
+
+    private static final DataframeMapper<List<ScenarioRow>, Void> SCENARIOS_MAPPER =
+            new DataframeMapperBuilder<List<ScenarioRow>, ScenarioRow, Void>()
+                    .itemsProvider(rows -> rows)
+                    .stringsIndex("scenario", ScenarioRow::scenario)
+                    .strings("base_timestep", ScenarioRow::baseTimestep)
+                    .booleans("versioned", ScenarioRow::versioned)
+                    .ints("snapshot_count", ScenarioRow::snapshotCount)
+                    .build();
+
+    private static final DataframeMapper<List<SnapshotInfo>, Void> SNAPSHOTS_MAPPER =
+            new DataframeMapperBuilder<List<SnapshotInfo>, SnapshotInfo, Void>()
+                    .itemsProvider(rows -> rows)
+                    .stringsIndex("snapshot", SnapshotInfo::iri)
+                    .strings("scenario", SnapshotInfo::scenario)
+                    .strings("version", SnapshotInfo::version)
+                    .strings("timestep", SnapshotInfo::timestep)
+                    .strings("timestep_label", i -> text(i.timestepLabel()))
+                    .strings("kind", i -> i.kind().name().toLowerCase(Locale.ROOT))
+                    .strings("parent", i -> text(i.parent()))
+                    .strings("edge", RdfDbUtil::edgeName)
+                    .ints("depth", SnapshotInfo::depth)
+                    .booleans("has_full", SnapshotInfo::hasFull)
+                    .booleans("fast", SnapshotInfo::fast)
+                    .strings("members", i -> String.join(";", i.members()))
+                    .strings("created", i -> i.created() == null ? "" : i.created().toString())
+                    .strings("description", i -> text(i.description()))
+                    .build();
+
+    private static final DataframeMapper<List<SnapshotCatalog.TimestepInfo>, Void> TIMESTEPS_MAPPER =
+            new DataframeMapperBuilder<List<SnapshotCatalog.TimestepInfo>, SnapshotCatalog.TimestepInfo, Void>()
+                    .itemsProvider(rows -> rows)
+                    .stringsIndex("timestep", SnapshotCatalog.TimestepInfo::timestep)
+                    .strings("scenario", SnapshotCatalog.TimestepInfo::scenario)
+                    .strings("label", t -> text(t.label()))
+                    .strings("root", t -> text(t.root()))
+                    .strings("head", t -> text(t.head()))
+                    .ints("version_count", SnapshotCatalog.TimestepInfo::versionCount)
+                    .strings("pinned_base", t -> text(t.pinnedBase()))
+                    .build();
+
+    private static final DataframeMapper<List<StoredModel>, Void> MODELS_MAPPER =
+            new DataframeMapperBuilder<List<StoredModel>, StoredModel, Void>()
+                    .itemsProvider(rows -> rows)
+                    .stringsIndex("id", StoredModel::id)
+                    .strings("scenario", StoredModel::scenario)
+                    .strings("subset", m -> m.subset().getIdentifier())
+                    .strings("kind", m -> m.kind().name().toLowerCase(Locale.ROOT))
+                    .ints("version", StoredModel::version)
+                    .strings("supersedes", m -> String.join(";", m.supersedes()))
+                    .strings("depends_on", m -> String.join(";", m.dependentOn()))
+                    .booleans("fast", StoredModel::fastPredicatesOnly)
+                    .ints("triple_count", m -> (int) m.tripleCount())
+                    .ints("chain_depth", StoredModel::chainDepth)
+                    .strings("created", m -> m.created() == null ? "" : m.created().toString())
+                    .build();
+
+    private static final DataframeMapper<List<VariantRow>, Void> VARIANTS_MAPPER =
+            new DataframeMapperBuilder<List<VariantRow>, VariantRow, Void>()
+                    .itemsProvider(rows -> rows)
+                    .stringsIndex("variant", VariantRow::variant)
+                    .strings("scenario", VariantRow::scenario)
+                    .strings("snapshot", VariantRow::snapshot)
+                    .strings("version", VariantRow::version)
+                    .strings("timestep", VariantRow::timestep)
+                    .strings("label", VariantRow::label)
+                    .strings("cloned_from", VariantRow::clonedFrom)
+                    .strings("eq", VariantRow::eq)
+                    .strings("ssh", VariantRow::ssh)
+                    .strings("case_date", VariantRow::caseDate)
+                    .strings("status", VariantRow::status)
+                    .strings("reasons", VariantRow::reasons)
+                    .build();
+
+    private static final DataframeMapper<List<VariantExportRow>, Void> VARIANT_EXPORT_MAPPER =
+            new DataframeMapperBuilder<List<VariantExportRow>, VariantExportRow, Void>()
+                    .itemsProvider(rows -> rows)
+                    .stringsIndex("variant", VariantExportRow::variant)
+                    .strings("snapshot", VariantExportRow::snapshot)
+                    .strings("version", VariantExportRow::version)
+                    .strings("timestep", VariantExportRow::timestep)
+                    .strings("models", VariantExportRow::models)
+                    .ints("exported_events", VariantExportRow::exportedEvent)
+                    .strings("rejected", VariantExportRow::rejected)
                     .build();
 
     private RdfDbUtil() {
@@ -140,7 +256,7 @@ public final class RdfDbUtil {
     public static List<String> loadCgmes(RdfDbConnection db, String scenario, ReadOnlyDataSource ds,
                                          Map<String, String> parameters, ReportNode reportNode) {
         CgmesTripleStoreLoader.Result result = db.loadCgmes(requireScenario(scenario), ds, null,
-                toProperties(parameters), reportNode == null ? ReportNode.NO_OP : reportNode);
+                toProperties(parameters), orNoOp(reportNode));
         return List.copyOf(result.contextNames());
     }
 
@@ -166,7 +282,7 @@ public final class RdfDbUtil {
             options.setPostProcessors(names);
         }
         return RdfDbNetworkLoader.load(db, requireScenario(scenario), options, NetworkFactory.findDefault(),
-                toProperties(parameters), reportNode == null ? ReportNode.NO_OP : reportNode);
+                toProperties(parameters), orNoOp(reportNode));
     }
 
     /**
@@ -178,8 +294,8 @@ public final class RdfDbUtil {
      * @param subsets    the CGMES subsets to read ({@code "SSH"}, {@code "SV"}, ...), empty for the steady-state pair
      * @param parameters the CGMES import parameters
      * @param reportNode where the update reports, may be {@code null}
-     * @return the route the update took. Follow-up WP5 adds {@code "noop"} and {@code "diff"}; in this work package
-     *         the only route is a plain update, so this is always {@code "update"}
+     * @return the route name of this legacy profile replacement, always {@code "update"}; the versioned routes are
+     *         taken by the other overload
      */
     public static String update(Network network, RdfDbConnection db, String scenario, List<String> subsets,
                                 Map<String, String> parameters, ReportNode reportNode) {
@@ -188,7 +304,7 @@ public final class RdfDbUtil {
             options.setSubsets(toSubsets(subsets));
         }
         RdfDbNetworkLoader.update(network, db, requireScenario(scenario), options, toProperties(parameters),
-                reportNode == null ? ReportNode.NO_OP : reportNode);
+                orNoOp(reportNode));
         return "update";
     }
 
@@ -257,34 +373,6 @@ public final class RdfDbUtil {
         return scenario;
     }
 
-    // ------------------------------------------------------------------ follow-up WP5: versions and timesteps
-
-    /** Key of the route an update took in the map {@link #updateInfo} returns. */
-    public static final String ROUTE = "route";
-    /** Key of the reasons the fast route was not taken. */
-    public static final String REASONS = "reasons";
-    /** Key of how many difference models were applied. */
-    public static final String DIFF_COUNT = "diff_count";
-    /** Key of how many statements were transferred. */
-    public static final String STATEMENT_COUNT = "statement_count";
-    /** Key of the IRI of the snapshot the network is at. */
-    public static final String SNAPSHOT = "snapshot";
-    /** Key of the scenario the network belongs to. */
-    public static final String SCENARIO = "scenario";
-    /** Key of the version label the network is at. */
-    public static final String VERSION = "version";
-    /** Key of the timestep the network is at. */
-    public static final String TIMESTEP = "timestep";
-    /** Key of the variant an update created or moved, empty when the update was not a variant operation. */
-    public static final String VARIANT = "variant";
-
-    private static final String NOOP = "noop";
-    private static final String DIFF = "diff";
-    private static final String FULL = "full";
-    private static final String REFUSED = "refused";
-    private static final String LEGACY_UPDATE = "update";
-    private static final String MAX_DIFF_CHAIN = "max_diff_chain";
-
     /**
      * One row of {@code db.scenarios()} as Python sees it.
      *
@@ -299,34 +387,14 @@ public final class RdfDbUtil {
     /**
      * What an update did, in a shape a C entry point can hand out as one handle.
      *
-     * <p>The versioned route answers with an {@link UpdateResult}; the legacy profile-replacement route of
-     * follow-up WP1 ({@code subsets=[...]}) answers with nothing at all, and is represented by its route name. Exactly
+     * <p>The versioned route answers with an {@link UpdateResult}; the legacy profile-replacement route
+     * ({@code subsets=[...]}) answers with nothing at all, and is represented by its route name. Exactly
      * one of the two is set.</p>
      *
      * @param result      the result of the versioned route, {@code null} on the legacy route
      * @param legacyRoute the route name of the legacy route, {@code null} on the versioned route
      */
     public record UpdateOutcome(UpdateResult result, String legacyRoute) {
-    }
-
-    /**
-     * Turn the empty string the C API uses for "not given" into {@code null}.
-     *
-     * @param text the value a caller gave
-     * @return the value, or {@code null} when it was {@code null}, empty or blank
-     */
-    public static String timestepOrNull(String text) {
-        return text == null || text.isBlank() ? null : text;
-    }
-
-    /**
-     * Refuse a missing scenario.
-     *
-     * @param scenario the scenario name a caller gave
-     * @return the scenario, unchanged
-     */
-    public static String checkScenario(String scenario) {
-        return requireScenario(scenario);
     }
 
     /**
@@ -420,8 +488,8 @@ public final class RdfDbUtil {
     public static Network load(RdfDbConnection db, String scenario, String version, String timestep,
                                Map<String, String> parameters, List<String> postProcessors, ReportNode reportNode) {
         requireScenario(scenario);
-        String step = timestepOrNull(timestep);
-        String label = timestepOrNull(version);
+        String step = blankToNull(timestep);
+        String label = blankToNull(version);
         if (label == null && step == null) {
             // "The scenario" without an address: the unversioned graphs, or the newest snapshot of a versioned
             // scenario. The loader decides which, and it is the only form that takes load options - so it is also
@@ -434,7 +502,7 @@ public final class RdfDbUtil {
                     + " version and a timestep, or run the post processors yourself");
         }
         return RdfDbNetworkLoader.load(db, scenario, label, step, NetworkFactory.findDefault(),
-                toProperties(parameters), reportNode == null ? ReportNode.NO_OP : reportNode);
+                toProperties(parameters), orNoOp(reportNode));
     }
 
     /**
@@ -456,7 +524,7 @@ public final class RdfDbUtil {
                                        String timestep, List<String> subsets, Map<String, String> options,
                                        Map<String, String> parameters, ReportNode reportNode) {
         requireScenario(scenario);
-        String targetVariant = options == null ? null : timestepOrNull(options.get(VARIANT));
+        String targetVariant = options == null ? null : blankToNull(options.get(VARIANT));
         if (subsets != null && !subsets.isEmpty()) {
             if (targetVariant != null) {
                 throw new PowsyblException("'" + VARIANT + "' addresses a snapshot as one variant of the network,"
@@ -466,8 +534,8 @@ public final class RdfDbUtil {
             update(network, db, scenario, subsets, parameters, reportNode);
             return new UpdateOutcome(null, LEGACY_UPDATE);
         }
-        String step = timestepOrNull(timestep);
-        String label = timestepOrNull(version);
+        String step = blankToNull(timestep);
+        String label = blankToNull(version);
         SnapshotCatalog catalog = db.snapshots(scenario);
         if (!catalog.isVersioned() && label == null && step == null) {
             if (targetVariant != null) {
@@ -492,7 +560,7 @@ public final class RdfDbUtil {
             }
         }
         UpdateResult result = RdfDbNetworkLoader.update(network, db, SnapshotRef.of(label, step, catalog),
-                updateOptions, toProperties(parameters), reportNode == null ? ReportNode.NO_OP : reportNode);
+                updateOptions, toProperties(parameters), orNoOp(reportNode));
         if (result.isReplacement()) {
             // The replacement network is a fresh object built by the materialiser; the threading mode is a property
             // of the handle its owner asked for, so it is carried over rather than silently reset
@@ -546,7 +614,7 @@ public final class RdfDbUtil {
     /**
      * Read CGMES instance files into a scenario, unversioned or as its root snapshot.
      *
-     * <p>Without a version this is the unversioned upload of follow-up WP1, which core refuses on a scenario that
+     * <p>Without a version this is the unversioned upload, which core refuses on a scenario that
      * already holds snapshots. With one, the files become the <em>root</em> snapshot of an empty scenario, or -
      * when the scenario already has a root - one further snapshot: the parent state is materialised, the new files
      * are compared against it and the difference is written ({@code SnapshotCatalog.putAsDiff}). That is how a day
@@ -566,8 +634,8 @@ public final class RdfDbUtil {
     public static List<String> loadCgmes(RdfDbConnection db, ReadOnlyDataSource ds, String scenario, String version,
                                          String timestep, Map<String, String> parameters, ReportNode reportNode) {
         requireScenario(scenario);
-        String label = timestepOrNull(version);
-        String step = timestepOrNull(timestep);
+        String label = blankToNull(version);
+        String step = blankToNull(timestep);
         if (label == null) {
             if (step != null) {
                 throw new PowsyblException("a timestep addresses a snapshot, so it needs a version: pass"
@@ -577,7 +645,7 @@ public final class RdfDbUtil {
         }
         SnapshotCatalog catalog = db.snapshots(scenario);
         Properties props = toProperties(parameters);
-        ReportNode rn = reportNode == null ? ReportNode.NO_OP : reportNode;
+        ReportNode rn = orNoOp(reportNode);
         SnapshotInfo written = catalog.isVersioned()
                 // A label is a wall time of this scenario's own base day, so only the catalogue can resolve it
                 ? catalog.putAsDiff(ds, null, SnapshotRef.of(label, step, catalog), props, rn)
@@ -601,10 +669,10 @@ public final class RdfDbUtil {
                                                String version, String timestep, Map<String, String> options) {
         requireScenario(scenario);
         Map<String, String> rest = databaseDecidedFree(options);
-        String variant = timestepOrNull(rest.remove(VARIANT));
+        String variant = blankToNull(rest.remove(VARIANT));
         CgmesDiffExport.ExportOptions exportOptions = NetworkEventRecording.diffOptions(rest);
         if (variant != null) {
-            if (timestepOrNull(timestep) != null) {
+            if (blankToNull(timestep) != null) {
                 throw new PowsyblException("a variant export writes the successor of the snapshot variant '"
                         + variant + "' stands for, so its timestep is that variant's own; drop the timestep");
             }
@@ -614,20 +682,14 @@ public final class RdfDbUtil {
                         + network.getVariantManager().getVariantIds());
             }
             checkSameScenario(network, scenario);
-            return recording.exportWithSnapshot(events ->
-                    RdfDbExport.exportVariant(recording.getNetwork(), events, db, variant, timestepOrNull(version),
-                                    exportOptions, ReportNode.NO_OP)
-                            .stored().stream()
-                            .map(StoredModel::id)
-                            .toList());
+            return recording.exportWithSnapshot(events -> storedIds(
+                    RdfDbExport.exportVariant(recording.getNetwork(), events, db, variant, blankToNull(version),
+                            exportOptions, ReportNode.NO_OP)));
         }
         // The label-taking form: the timestep is resolved against the base day of this very scenario
-        return recording.exportWithSnapshot(events ->
-                RdfDbExport.export(recording.getNetwork(), events, db, scenario, timestepOrNull(version),
-                                timestepOrNull(timestep), exportOptions, ReportNode.NO_OP)
-                        .stored().stream()
-                        .map(StoredModel::id)
-                        .toList());
+        return recording.exportWithSnapshot(events -> storedIds(
+                RdfDbExport.export(recording.getNetwork(), events, db, scenario, blankToNull(version),
+                        blankToNull(timestep), exportOptions, ReportNode.NO_OP)));
     }
 
     /**
@@ -671,7 +733,7 @@ public final class RdfDbUtil {
         CgmesDiffExport.ExportOptions exportOptions = NetworkEventRecording.diffOptions(rest);
         checkSameScenario(recording.getNetwork(), scenario);
         Map<String, RdfDbExport.VariantExport> exports = recording.exportWithSnapshot(events ->
-                RdfDbExport.exportPerVariant(recording.getNetwork(), events, db, timestepOrNull(version),
+                RdfDbExport.exportPerVariant(recording.getNetwork(), events, db, blankToNull(version),
                         exportOptions, ReportNode.NO_OP));
         List<VariantExportRow> rows = new ArrayList<>();
         exports.forEach((variantId, export) -> {
@@ -681,15 +743,12 @@ public final class RdfDbUtil {
                     snapshot == null ? "" : snapshot.iri(),
                     snapshot == null ? "" : snapshot.version(),
                     snapshot == null ? "" : snapshot.timestep(),
-                    result == null ? "" : result.stored().stream().map(StoredModel::id)
-                            .collect(java.util.stream.Collectors.joining(";")),
+                    result == null ? "" : String.join(";", storedIds(result)),
                     result == null ? 0 : result.exportedEvents().size(),
                     String.join("; ", export.rejected())));
         });
         return rows;
     }
-
-    // ------------------------------------------------------------------ step 12: snapshots as network variants
 
     /**
      * Load many snapshots of one scenario as the variants of a single network.
@@ -728,15 +787,15 @@ public final class RdfDbUtil {
         SnapshotCatalog catalog = db.snapshots(scenario);
         List<VariantRequest> requests = new ArrayList<>();
         for (int i = 0; i < timesteps.size(); i++) {
-            SnapshotRef ref = SnapshotRef.of(timestepOrNull(versions.get(i)), timestepOrNull(timesteps.get(i)),
+            SnapshotRef ref = SnapshotRef.of(blankToNull(versions.get(i)), blankToNull(timesteps.get(i)),
                     catalog);
-            requests.add(new VariantRequest(timestepOrNull(variantIds.get(i)), ref));
+            requests.add(new VariantRequest(blankToNull(variantIds.get(i)), ref));
         }
         RdfDbVariantLoadOptions options = new RdfDbVariantLoadOptions()
                 .setAllowVariantMultiThreadAccess(allowVariantMultiThreadAccess);
         VariantLoadResult result = RdfDbNetworkLoader.loadVariants(db, scenario, requests, options,
                 NetworkFactory.findDefault(), toProperties(parameters),
-                reportNode == null ? ReportNode.NO_OP : reportNode);
+                orNoOp(reportNode));
         return result.network();
     }
 
@@ -926,7 +985,7 @@ public final class RdfDbUtil {
      */
     public static Map<String, String> identity(Network network, RdfDbConnection db, String scenario,
                                                String variant) {
-        String variantId = timestepOrNull(variant);
+        String variantId = blankToNull(variant);
         if (variantId == null) {
             return identity(network, db, scenario);
         }
@@ -957,7 +1016,7 @@ public final class RdfDbUtil {
         requireScenario(scenario);
         SnapshotCatalog catalog = db.snapshots(scenario);
         return Checkpoint.create(db,
-                SnapshotRef.of(timestepOrNull(version), timestepOrNull(timestep), catalog)).iri();
+                SnapshotRef.of(blankToNull(version), blankToNull(timestep), catalog)).iri();
     }
 
     /**
@@ -988,94 +1047,6 @@ public final class RdfDbUtil {
         return MODELS_MAPPER;
     }
 
-    private static final List<String> DATABASE_DECIDED_OPTIONS = List.of(NetworkEventRecording.VERSION,
-            NetworkEventRecording.SCENARIO_TIME, NetworkEventRecording.SUPERSEDES, NetworkEventRecording.DEPENDS_ON);
-
-    private static final DataframeMapper<List<ScenarioRow>, Void> SCENARIOS_MAPPER =
-            new DataframeMapperBuilder<List<ScenarioRow>, ScenarioRow, Void>()
-                    .itemsProvider(rows -> rows)
-                    .stringsIndex("scenario", ScenarioRow::scenario)
-                    .strings("base_timestep", ScenarioRow::baseTimestep)
-                    .booleans("versioned", ScenarioRow::versioned)
-                    .ints("snapshot_count", ScenarioRow::snapshotCount)
-                    .build();
-
-    private static final DataframeMapper<List<SnapshotInfo>, Void> SNAPSHOTS_MAPPER =
-            new DataframeMapperBuilder<List<SnapshotInfo>, SnapshotInfo, Void>()
-                    .itemsProvider(rows -> rows)
-                    .stringsIndex("snapshot", SnapshotInfo::iri)
-                    .strings("scenario", SnapshotInfo::scenario)
-                    .strings("version", SnapshotInfo::version)
-                    .strings("timestep", SnapshotInfo::timestep)
-                    .strings("timestep_label", i -> text(i.timestepLabel()))
-                    .strings("kind", i -> i.kind().name().toLowerCase(Locale.ROOT))
-                    .strings("parent", i -> text(i.parent()))
-                    .strings("edge", RdfDbUtil::edgeName)
-                    .ints("depth", SnapshotInfo::depth)
-                    .booleans("has_full", SnapshotInfo::hasFull)
-                    .booleans("fast", SnapshotInfo::fast)
-                    .strings("members", i -> String.join(";", i.members()))
-                    .strings("created", i -> i.created() == null ? "" : i.created().toString())
-                    .strings("description", i -> text(i.description()))
-                    .build();
-
-    private static final DataframeMapper<List<SnapshotCatalog.TimestepInfo>, Void> TIMESTEPS_MAPPER =
-            new DataframeMapperBuilder<List<SnapshotCatalog.TimestepInfo>, SnapshotCatalog.TimestepInfo, Void>()
-                    .itemsProvider(rows -> rows)
-                    .stringsIndex("timestep", SnapshotCatalog.TimestepInfo::timestep)
-                    .strings("scenario", SnapshotCatalog.TimestepInfo::scenario)
-                    .strings("label", t -> text(t.label()))
-                    .strings("root", t -> text(t.root()))
-                    .strings("head", t -> text(t.head()))
-                    .ints("version_count", SnapshotCatalog.TimestepInfo::versionCount)
-                    .strings("pinned_base", t -> text(t.pinnedBase()))
-                    .build();
-
-    private static final DataframeMapper<List<StoredModel>, Void> MODELS_MAPPER =
-            new DataframeMapperBuilder<List<StoredModel>, StoredModel, Void>()
-                    .itemsProvider(rows -> rows)
-                    .stringsIndex("id", StoredModel::id)
-                    .strings("scenario", StoredModel::scenario)
-                    .strings("subset", m -> m.subset().getIdentifier())
-                    .strings("kind", m -> m.kind().name().toLowerCase(Locale.ROOT))
-                    .ints("version", StoredModel::version)
-                    .strings("supersedes", m -> String.join(";", m.supersedes()))
-                    .strings("depends_on", m -> String.join(";", m.dependentOn()))
-                    .booleans("fast", StoredModel::fastPredicatesOnly)
-                    .ints("triple_count", m -> (int) m.tripleCount())
-                    .ints("chain_depth", StoredModel::chainDepth)
-                    .strings("created", m -> m.created() == null ? "" : m.created().toString())
-                    .build();
-
-    private static final DataframeMapper<List<VariantRow>, Void> VARIANTS_MAPPER =
-            new DataframeMapperBuilder<List<VariantRow>, VariantRow, Void>()
-                    .itemsProvider(rows -> rows)
-                    .stringsIndex("variant", VariantRow::variant)
-                    .strings("scenario", VariantRow::scenario)
-                    .strings("snapshot", VariantRow::snapshot)
-                    .strings("version", VariantRow::version)
-                    .strings("timestep", VariantRow::timestep)
-                    .strings("label", VariantRow::label)
-                    .strings("cloned_from", VariantRow::clonedFrom)
-                    .strings("eq", VariantRow::eq)
-                    .strings("ssh", VariantRow::ssh)
-                    .strings("case_date", VariantRow::caseDate)
-                    .strings("status", VariantRow::status)
-                    .strings("reasons", VariantRow::reasons)
-                    .build();
-
-    private static final DataframeMapper<List<VariantExportRow>, Void> VARIANT_EXPORT_MAPPER =
-            new DataframeMapperBuilder<List<VariantExportRow>, VariantExportRow, Void>()
-                    .itemsProvider(rows -> rows)
-                    .stringsIndex("variant", VariantExportRow::variant)
-                    .strings("snapshot", VariantExportRow::snapshot)
-                    .strings("version", VariantExportRow::version)
-                    .strings("timestep", VariantExportRow::timestep)
-                    .strings("models", VariantExportRow::models)
-                    .ints("exported_events", VariantExportRow::exportedEvent)
-                    .strings("rejected", VariantExportRow::rejected)
-                    .build();
-
     private static String routeName(UpdateResult.Route route) {
         return switch (route) {
             case NOOP -> NOOP;
@@ -1087,8 +1058,27 @@ public final class RdfDbUtil {
         };
     }
 
-    private static String millis(java.time.Duration duration) {
+    private static String millis(Duration duration) {
         return duration == null ? "0" : Long.toString(duration.toMillis());
+    }
+
+    private static ReportNode orNoOp(ReportNode reportNode) {
+        return reportNode == null ? ReportNode.NO_OP : reportNode;
+    }
+
+    private static List<String> storedIds(RdfDbExport.SnapshotResult result) {
+        return result.stored().stream().map(StoredModel::id).toList();
+    }
+
+    /**
+     * Turn the empty string the C API uses for "not given" into {@code null}; used for every optional text
+     * argument (version, timestep, variant).
+     *
+     * @param text the value a caller gave
+     * @return the value, or {@code null} when it was {@code null}, empty or blank
+     */
+    public static String blankToNull(String text) {
+        return text == null || text.isBlank() ? null : text;
     }
 
     private static String text(String value) {
@@ -1122,7 +1112,7 @@ public final class RdfDbUtil {
         identity.put(VERSION, info.version());
         identity.put(TIMESTEP, info.timestep());
         if (info.timestepLabel() != null) {
-            identity.put("label", info.timestepLabel());
+            identity.put(LABEL, info.timestepLabel());
         }
     }
 }

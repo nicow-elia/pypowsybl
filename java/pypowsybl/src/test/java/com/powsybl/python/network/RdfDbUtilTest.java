@@ -201,15 +201,13 @@ class RdfDbUtilTest {
     }
 
     /**
-     * Follow-up WP5 replaced the "not yet implemented" rejection of {@code version} and {@code timestep} of
-     * follow-up WP1 by the real versioned addressing; what is left of the old check is that a timestep without a
-     * version addresses nothing.
+     * A blank optional argument means "not given", and a timestep without a version addresses nothing.
      */
     @Test
     void aTimestepWithoutAVersionIsRejected() {
-        assertEquals(null, RdfDbUtil.timestepOrNull(""));
-        assertEquals(null, RdfDbUtil.timestepOrNull(null));
-        assertEquals("8:30", RdfDbUtil.timestepOrNull("8:30"));
+        assertEquals(null, RdfDbUtil.blankToNull(""));
+        assertEquals(null, RdfDbUtil.blankToNull(null));
+        assertEquals("8:30", RdfDbUtil.blankToNull("8:30"));
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
             assertThatThrownBy(() -> RdfDbUtil.loadCgmes(db, microGridBe(), SCENARIO, null, "8:30", Map.of(), null))
                     .isInstanceOf(PowsyblException.class)

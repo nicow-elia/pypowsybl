@@ -80,7 +80,7 @@ def next_day_zip(day: str = NEXT_DAY, suffix: str = '-d1') -> io.BytesIO:
 _CONSUMER_P = re.compile(r'(<cim:EnergyConsumer\.p>)(-?[0-9.eE+]+)(</cim:EnergyConsumer\.p>)')
 
 
-def ssh_variant(k: int, label: str, day: str = SCENARIO) -> io.BytesIO:
+def ssh_variant(k: int, label: str, day: str = SCENARIO, suffix: str = '') -> io.BytesIO:
     """
     The daily CGMES export of one timestep, standing in for a real schedule.
 
@@ -93,6 +93,8 @@ def ssh_variant(k: int, label: str, day: str = SCENARIO) -> io.BytesIO:
         k: which timestep this is
         label: the wall time the files claim, ``"HH:MM"``
         day: the day they claim, which has to be the base day of the scenario they go into
+        suffix: appended to the model identifier only. The tests share one Fuseki server between many scenarios
+            and pass the scenario name here, so that two of them never store two models claiming one identity
     """
     hour, minute = label.split(':')
     instant = f'{day}T{int(hour):02d}:{int(minute):02d}:00Z'
@@ -101,7 +103,7 @@ def ssh_variant(k: int, label: str, day: str = SCENARIO) -> io.BytesIO:
         for entry in source.namelist():
             content = source.read(entry).decode('utf-8')
             if entry.endswith('SSH.xml'):
-                content = _ABOUT.sub(lambda m: m.group(1) + f'urn:uuid:ssh-{day}-{k}-{label.replace(":", "")}'
+                content = _ABOUT.sub(lambda m: m.group(1) + f'urn:uuid:ssh-{day}-{k}-{label.replace(":", "")}{suffix}'
                                      + m.group(3), content, count=1)
                 content = _SCENARIO_TIME.sub(lambda m: m.group(1) + instant + m.group(3), content)
                 content = _CONSUMER_P.sub(
@@ -115,26 +117,37 @@ _LINE_NAME = re.compile(r'(<cim:ACLineSegment\b[^>]*>.*?<cim:IdentifiedObject\.n
                         re.DOTALL)
 
 
-def eq_drift(k: int, label: str, day: str = SCENARIO) -> io.BytesIO:
+def eq_drift(k: int, label: str, day: str = SCENARIO, suffix: str = '') -> io.BytesIO:
     """
     A timestep whose **equipment model** drifted: :func:`ssh_variant` plus one renamed line.
 
     The equipment of a day is not always quite the equipment of the base, and a name is the cheapest change that
     no in-place update knows how to apply. The difference is stored like any other, but it is not fast-route
     capable - which is what makes a network walking to this timestep fall back to a full reload.
+
+    Args:
+        k: which timestep this is, as in :func:`ssh_variant`; the renamed line is called :func:`drifted_name` ``(k)``
+        label: the wall time the files claim, ``"HH:MM"``
+        day: the day they claim
+        suffix: appended to the model identifiers only, see :func:`ssh_variant`
     """
-    source = ssh_variant(k, label, day)
+    source = ssh_variant(k, label, day, suffix)
     buffer = io.BytesIO()
     with zipfile.ZipFile(source) as archive, zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as target:
         for entry in archive.namelist():
             content = archive.read(entry).decode('utf-8')
             if entry.endswith('EQ.xml') and '_BD_' not in entry:
-                content = _ABOUT.sub(lambda m: m.group(1) + f'urn:uuid:eq-{k}-{label.replace(":", "")}'
+                content = _ABOUT.sub(lambda m: m.group(1) + f'urn:uuid:eq-{k}-{label.replace(":", "")}{suffix}'
                                      + m.group(3), content, count=1)
-                content = _LINE_NAME.sub(lambda m: m.group(1) + f'drifted-{k}' + m.group(3), content, count=1)
+                content = _LINE_NAME.sub(lambda m: m.group(1) + drifted_name(k) + m.group(3), content, count=1)
             target.writestr(entry, content)
     buffer.seek(0)
     return buffer
+
+
+def drifted_name(k: int) -> str:
+    """The name :func:`eq_drift` gives the line it renames."""
+    return f'drifted-{k}'
 
 
 def fresh_scenario(db, name: str) -> str:  # type: ignore[no-untyped-def]

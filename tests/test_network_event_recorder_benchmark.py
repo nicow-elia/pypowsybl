@@ -41,8 +41,6 @@ import sys
 import time
 from typing import Callable, Dict, List, Tuple
 
-import pytest
-
 import pypowsybl as pp
 
 TEST_DIR = pathlib.Path(__file__).parent
@@ -162,11 +160,6 @@ def _print(results: Dict[str, float], notes: List[str]) -> None:
         print(f'# {note}')
     for name, seconds in results.items():
         print(f'{name:50s} {seconds * 1000:9.2f} ms')
-
-
-@pytest.fixture(autouse=True)
-def set_up():
-    pp.set_config_read(False)
 
 
 def test_benchmark():

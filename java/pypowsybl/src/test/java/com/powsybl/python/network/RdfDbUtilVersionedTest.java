@@ -13,9 +13,6 @@ import com.powsybl.cgmes.rdfdb.SnapshotInfo;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.datasource.MemDataSource;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
-import com.powsybl.dataframe.DataframeFilter;
-import com.powsybl.dataframe.impl.DefaultDataframeHandler;
-import com.powsybl.dataframe.impl.Series;
 import com.powsybl.iidm.network.Load;
 import com.powsybl.iidm.network.Network;
 import org.junit.jupiter.api.Test;
@@ -25,13 +22,12 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import static com.powsybl.python.network.RdfDbTestSupport.columns;
 import static com.powsybl.python.network.RdfDbUtilTest.importParameters;
 import static com.powsybl.python.network.RdfDbUtilTest.memoryUrl;
 import static com.powsybl.python.network.RdfDbUtilTest.microGridBe;
@@ -350,13 +346,5 @@ class RdfDbUtilVersionedTest {
             assertFalse(RdfDbUtil.snapshots(db, "never-uploaded").iterator().hasNext(),
                     "an unknown scenario lists nothing rather than failing");
         }
-    }
-
-    private static <T> List<String> columns(com.powsybl.dataframe.DataframeMapper<T, Void> mapper, T rows) {
-        List<Series> series = new ArrayList<>();
-        mapper.createDataframe(rows, new DefaultDataframeHandler(series::add), new DataframeFilter());
-        Map<String, Series> byName = new LinkedHashMap<>();
-        series.forEach(s -> byName.put(s.getName(), s));
-        return List.copyOf(byName.keySet());
     }
 }

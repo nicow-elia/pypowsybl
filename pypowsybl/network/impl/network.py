@@ -8,8 +8,10 @@
 from __future__ import annotations  # Necessary for type alias like _DataFrame to work with sphinx
 
 import io
+import os
 import sys
 import zipfile
+from xml.etree import ElementTree
 
 import datetime
 from datetime import timezone
@@ -52,6 +54,8 @@ from .rdf_db import (
     RdfDbVariantRefusedError,
     Timestep,
     _check_scenario,
+    _check_variant,
+    _report_handle,
     _split_reasons,
     _timestep_to_str,
     _version_to_str,
@@ -62,6 +66,37 @@ from .util import create_data_frame_from_series_array, ParamsDict
 
 if TYPE_CHECKING:
     from .rdf_db import RdfDatabase
+
+
+_DIFFERENCE_MODEL_TAG = '{http://iec.ch/TC57/61970-552/DifferenceModel/1#}DifferenceModel'
+
+
+def _is_zip_file(path: str) -> bool:
+    """Whether a file is a zip archive, by its first bytes (a missing file is not)."""
+    try:
+        with open(path, 'rb') as stream:
+            return stream.read(4) in (b'PK\x03\x04', b'PK\x05\x06')
+    except OSError:
+        return False
+
+
+def _is_difference_model_file(path: str) -> bool:
+    """
+    Whether a file is a CGMES difference model document: its root element's first child is a ``dm:DifferenceModel``.
+
+    The same check powsybl's CGMES importer does. Only the first two elements are parsed, and anything that is not
+    readable, well formed XML simply is not a difference model.
+    """
+    try:
+        with open(path, 'rb') as stream:
+            starts = 0
+            for _, element in ElementTree.iterparse(stream, events=('start',)):
+                starts += 1
+                if starts == 2:  # the second start element is the first child of the root
+                    return element.tag == _DIFFERENCE_MODEL_TAG
+    except (OSError, ElementTree.ParseError, ValueError):
+        return False
+    return False
 
 
 class WorkingVariantScope:
@@ -188,14 +223,43 @@ class Network:  # pylint: disable=too-many-public-methods
         """
         Updates a network by loading information from a file. File should be in a supported format.
 
+        What is read depends on the file:
+
+        * a **zip archive** (recognised by its content, not its name): every entry is read. Difference models of
+          several profiles are applied together; several difference models of one profile are applied one after
+          the other along their ``md:Model.Supersedes`` chain, and refused, naming the entries, when they do not
+          form one. The steps are not one transaction: a step that cannot be applied leaves the steps before it
+          applied;
+        * a single **CGMES difference model** document (a ``dm:DifferenceModel``, recognised by its content, so
+          any name and extension works, e.g. ``update.diff``): **only that file** is read, whatever lies next to it;
+        * any other file: handed to the importer as before. For CGMES this reads every file of the same folder whose
+          name starts with the file's base name, which is how ``network_SSH.xml`` finds the rest of its model.
+
+        A relative ``file`` is resolved against the current working directory of the Python process.
+
         Args:
            file:       path to the network file
            parameters: a dictionary of import parameters (optional)
            post_processors: a list of import post processors (optional, will be added to the ones defined by the platform config)
            report_node: the reporter to be used to create an execution report, default is None (no report)
         """
-        file = path_to_str(file)
-        _pp.update_network(self._handle, file,
+        path = os.path.abspath(path_to_str(file))
+        is_zip = _is_zip_file(path)
+        if (is_zip and not path.lower().endswith('.zip')) or (not is_zip and _is_difference_model_file(path)):
+            with open(path, 'rb') as stream:
+                content = stream.read()
+            buffer = io.BytesIO(content)
+            if not is_zip:
+                # The in-memory archive holds this one document only; its entry name has to end in .xml for the
+                # CGMES data source to look at it. The content, not the name, says it is a difference model
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, 'w', zipfile.ZIP_STORED) as archive:
+                    archive.writestr(os.path.splitext(os.path.basename(path))[0] + '.xml', content)
+                buffer.seek(0)
+            # a zip under another name goes the same way: powsybl picks a file's decompression by its extension
+            self.update_from_binary_buffers([buffer], parameters, post_processors, report_node)
+            return
+        _pp.update_network(self._handle, path,
                            {} if parameters is None else parameters,
                            [] if post_processors is None else post_processors,
                            None if report_node is None else report_node._report_node)
@@ -341,14 +405,12 @@ class Network:  # pylint: disable=too-many-public-methods
                              'no snapshot; it cannot be combined with a version, a timestep or a variant')
         options = {'max_diff_chain': str(max_diff_chain)}
         if variant is not None:
-            if not isinstance(variant, str) or not variant.strip():
-                raise ValueError(f'A variant identifier must be a non-blank string, got {variant!r}')
-            options['variant'] = variant
+            options['variant'] = _check_variant(variant)
         outcome = _pp.update_network_from_rdf_db(self._handle, db._check_open(),  # pylint: disable=protected-access
                                                  scenario, _version_to_str(version), _timestep_to_str(timestep),
                                                  [] if subsets is None else subsets, options,
                                                  {} if parameters is None else parameters,
-                                                 None if report_node is None else report_node._report_node)  # pylint: disable=protected-access
+                                                 _report_handle(report_node))
         info = _pp.get_rdf_db_update_info(outcome)
         route = info['route']
         answered_variant = info.get('variant') or None
@@ -394,9 +456,7 @@ class Network:  # pylint: disable=too-many-public-methods
             ValueError: ``db`` was given without a ``scenario``
             pypowsybl.PyPowsyblError: the network has no such variant, or that variant stands for no snapshot
         """
-        if variant is not None and (not isinstance(variant, str) or not variant.strip()):
-            raise ValueError(f'A variant identifier must be a non-blank string, got {variant!r}')
-        variant_id = '' if variant is None else variant
+        variant_id = '' if variant is None else _check_variant(variant)
         if db is None:
             return _pp.get_network_rdf_db_identity(self._handle, None, '', variant_id)
         if scenario is None:

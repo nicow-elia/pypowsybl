@@ -36,16 +36,12 @@ import pypowsybl as pp
 import pypowsybl.loadflow as lf
 from pypowsybl import PyPowsyblError
 from pypowsybl.network import RdfDbVariantRefusedError
+from pypowsybl.network.impl.rdf_db import _split_reasons
 from rdf_db_fixtures import CGMES_ZIP, drifted_name, eq_drift, ssh_variant
 
 PARAMS = {'iidm.import.cgmes.create-cgmes-export-mapping': 'true'}
 LABELS = ['20:00', '20:15', '20:30']
 TESTS_DIR = Path(__file__).parent
-
-
-@pytest.fixture(autouse=True)
-def no_config() -> None:
-    pp.set_config_read(False)
 
 
 def _a_day(db: pp.network.RdfDatabase, scenario: str, labels: List[str] = None) -> None:
@@ -68,11 +64,6 @@ def _loads(network: pp.network.Network, variant: str) -> pd.DataFrame:
 
 def _total_load(network: pp.network.Network, variant: str) -> float:
     return float(_loads(network, variant)['p0'].sum())
-
-
-def _split(reasons: str) -> List[str]:
-    """The reasons of a table cell, split the way :class:`RdfDbVariantRefusedError` splits them."""
-    return [line.strip() for line in reasons.split('; ') if line.strip()]
 
 
 def _binding(network: pp.network.Network) -> Dict[str, pd.Series]:
@@ -193,7 +184,7 @@ def test_an_equipment_drift_is_refused_and_changes_nothing(rdf_db_url: str, scen
         refused = table[table['status'] == 'refused']
         assert list(refused.index) == ['drifted']
         assert str(refused.iloc[0]['reasons'])
-        assert error.value.reasons == _split(str(refused.iloc[0]['reasons'])), \
+        assert error.value.reasons == _split_reasons(str(refused.iloc[0]['reasons'])), \
             'a single update and the table say the same thing, line by line'
 
         # refusing a variant that *exists* puts the reasons on that variant's own row: still one row per variant
@@ -629,7 +620,7 @@ def test_an_unnamed_export_on_a_user_clone_is_unchanged(rdf_db_url: str, scenari
             network.update_loads(id=load, p0=31.0)
             network.update_lines(id=line, r=0.31)
 
-        # ...but nothing opted in, so the shared change is written exactly as it was before step 12
+        # ...but nothing opted in, so the shared change is written exactly as it was before variants existed
         assert sorted((recorder.to_cgmes_diffs() or {}).keys()) == ['EQ', 'SSH']
         assert '<cim:EnergyConsumer.p>31</cim:EnergyConsumer.p>' in recorder.to_ssh(unsupported='ignore')
         assert network.get_working_variant_id() == 'what-if'

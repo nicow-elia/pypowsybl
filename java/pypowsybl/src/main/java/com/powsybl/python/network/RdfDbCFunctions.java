@@ -97,17 +97,6 @@ public final class RdfDbCFunctions {
         });
     }
 
-    @CEntryPoint(name = "getRdfDbScenarios")
-    public static ArrayPointer<CCharPointerPointer> getRdfDbScenarios(IsolateThread thread, ObjectHandle dbHandle,
-                                                                     ExceptionHandlerPointer exceptionHandlerPtr) {
-        return doCatch(exceptionHandlerPtr, new PointerProvider<>() {
-            @Override
-            public ArrayPointer<CCharPointerPointer> get() {
-                return Util.createCharPtrArray(RdfDbUtil.scenarios(connection(dbHandle)));
-            }
-        });
-    }
-
     @CEntryPoint(name = "getRdfDbGraphs")
     public static ArrayPointer<SeriesPointer> getRdfDbGraphs(IsolateThread thread, ObjectHandle dbHandle,
                                                             CCharPointer scenarioPtr,
@@ -396,7 +385,7 @@ public final class RdfDbCFunctions {
         });
     }
 
-    // ------------------------------------------------------------------ step 12: snapshots as network variants
+    // ------------------------------------------------------------------ snapshots as network variants
 
     @CEntryPoint(name = "loadNetworkVariantsFromRdfDb")
     public static ObjectHandle loadNetworkVariantsFromRdfDb(IsolateThread thread, ObjectHandle dbHandle,

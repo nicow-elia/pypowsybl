@@ -1233,8 +1233,6 @@ PYBIND11_MODULE(_pypowsybl, m) {
           py::call_guard<py::gil_scoped_release>(), py::arg("url"), py::arg("options"));
     m.def("close_rdf_db_connection", &pypowsybl::closeRdfDbConnection, "Close a connection to an RDF graph database",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"));
-    m.def("get_rdf_db_scenarios", &pypowsybl::getRdfDbScenarios, "Get the scenarios an RDF graph database holds data for",
-          py::call_guard<py::gil_scoped_release>(), py::arg("db"));
     m.def("get_rdf_db_graphs", &pypowsybl::getRdfDbGraphs, "Create a series array of the named graphs of one scenario",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"));
     m.def("clear_rdf_db", &pypowsybl::clearRdfDb, "Drop every graph of one scenario",

@@ -9,18 +9,15 @@ package com.powsybl.python.network;
 
 import com.powsybl.cgmes.rdfdb.RdfDbConnection;
 import com.powsybl.commons.PowsyblException;
-import com.powsybl.dataframe.DataframeFilter;
-import com.powsybl.dataframe.DataframeMapper;
-import com.powsybl.dataframe.impl.DefaultDataframeHandler;
-import com.powsybl.dataframe.impl.Series;
 import com.powsybl.iidm.network.Network;
 import org.junit.jupiter.api.Test;
 
-import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static com.powsybl.python.network.RdfDbTestSupport.columns;
+import static com.powsybl.python.network.RdfDbTestSupport.totalLoad;
 import static com.powsybl.python.network.RdfDbUtilTest.importParameters;
 import static com.powsybl.python.network.RdfDbUtilTest.memoryUrl;
 import static com.powsybl.python.network.RdfDbUtilVersionedTest.OTHER;
@@ -53,16 +50,6 @@ class RdfDbUtilVariantsTest {
         RdfDbUtil.loadCgmes(db, timestepFiles("t0845", 1.3, "2014-06-01T08:45:00Z", false), S, "1.1", "8:45",
                 importParameters(), null);
         return sender;
-    }
-
-    private static double totalLoad(Network network, String variant) {
-        String previous = network.getVariantManager().getWorkingVariantId();
-        network.getVariantManager().setWorkingVariant(variant);
-        try {
-            return network.getLoadStream().mapToDouble(load -> load.getP0()).sum();
-        } finally {
-            network.getVariantManager().setWorkingVariant(previous);
-        }
     }
 
     private static Map<String, RdfDbUtil.VariantRow> byVariant(Network network) {
@@ -540,13 +527,5 @@ class RdfDbUtilVariantsTest {
         assertThat(recording.toPartialSsh(Map.of()))
                 .contains("<cim:EnergyConsumer.p>64</cim:EnergyConsumer.p>");
         assertEquals("scratch", network.getVariantManager().getWorkingVariantId());
-    }
-
-    private static <T> List<String> columns(DataframeMapper<T, Void> mapper, T rows) {
-        List<Series> series = new ArrayList<>();
-        mapper.createDataframe(rows, new DefaultDataframeHandler(series::add), new DataframeFilter());
-        Map<String, Series> byName = new LinkedHashMap<>();
-        series.forEach(s -> byName.put(s.getName(), s));
-        return List.copyOf(byName.keySet());
     }
 }

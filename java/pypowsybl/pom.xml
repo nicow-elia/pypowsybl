@@ -212,7 +212,7 @@
             <artifactId>powsybl-cgmes-extensions</artifactId>
         </dependency>
         <!--
-        diffstacking follow-up WP1: split CGMES loading (files -> RDF database -> IIDM).
+        diffstacking: split CGMES loading (files -> RDF database -> IIDM).
         Compile scope: RdfDbUtil calls RdfDatabase / RdfDbConnection / RdfDbNetworkLoader directly.
         It drags in powsybl-triple-store-impl-rdf4j-sparql (rdf4j SPARQLRepository + Graph Store Protocol client).
         -->
@@ -414,7 +414,7 @@
             <scope>test</scope>
         </dependency>
         <!--
-        diffstacking follow-up WP1: an embedded Apache Jena Fuseki for the RDF database tests.
+        diffstacking: an embedded Apache Jena Fuseki for the RDF database tests.
         TEST SCOPE ONLY - Jena must never reach the native image; the Python tests start a Fuseki
         subprocess instead (tests/fuseki_server.py). Version and exclusions come from the powsybl-core BOM.
         -->

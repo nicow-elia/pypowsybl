@@ -146,11 +146,8 @@ public final class NetworkEventRecorderCFunctions {
             public CCharPointer get() {
                 Map<String, String> options = CTypeUtil.toStringMap(optionKeysPtr, optionKeysCount,
                         optionValuesPtr, optionValuesCount);
-                String profile = CTypeUtil.toStringOrNull(profilePtr);
-                if (profile != null && profile.isEmpty()) {
-                    profile = null;
-                }
-                return CTypeUtil.toCharPtr(recording(recorderHandle).toCgmesDiff(profile, options));
+                return CTypeUtil.toCharPtr(recording(recorderHandle).toCgmesDiff(CTypeUtil.toStringOrNull(profilePtr),
+                        options));
             }
         });
     }
