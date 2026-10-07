@@ -199,6 +199,7 @@ public final class RdfDbUtil {
                     .strings("supersedes", m -> String.join(";", m.supersedes()))
                     .strings("depends_on", m -> String.join(";", m.dependentOn()))
                     .booleans("fast", StoredModel::fastPredicatesOnly)
+                    .strings("capabilities", m -> text(m.capabilities()))
                     .ints("triple_count", m -> (int) m.tripleCount())
                     .ints("chain_depth", StoredModel::chainDepth)
                     .strings("created", m -> m.created() == null ? "" : m.created().toString())

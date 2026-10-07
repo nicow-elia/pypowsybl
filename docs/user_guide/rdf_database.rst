@@ -695,7 +695,11 @@ moment), :meth:`RdfDatabase.models` (the stored CGMES models, with the chain eac
 lists the trees of a scenario. ``timestamp`` columns are ``datetime64[ns, UTC]``, ``version`` columns hold the
 version name (``str``) and every table that has one carries the ``rank`` the registry gives it (``int64``,
 nullable where a row may stand for no snapshot). A scenario the database does not hold gives an empty
-frame with the documented columns rather than an error.
+frame with the documented columns rather than an error. Every stored difference names the **capability version** of the library that wrote it - the
+``capabilities`` column of :meth:`RdfDatabase.models`, ``<12 hex>/<core version>``: a hash of what that library could
+apply in place, and its version. A reader trusts a difference written by its own or an older version; one written by
+a newer library is re-checked against the reader's own table before it is applied in place, and when the reader
+cannot apply it, :meth:`Network.update_from_rdf_db` falls back to ``'full'`` with a reason naming both versions.
 
 Checkpoints
 -----------

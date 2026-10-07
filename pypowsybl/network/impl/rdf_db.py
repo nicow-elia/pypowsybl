@@ -595,7 +595,9 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
         Returns:
             a dataframe indexed by ``id`` (the CGMES model id) with the columns ``scenario``, ``subset``, ``kind``
             (``full``/``diff``), ``version`` (the CGMES ``md:Model.version``), ``supersedes`` and ``depends_on``
-            (``;``-joined), ``fast`` (bool), ``triple_count`` (int), ``chain_depth`` (int) and ``created``
+            (``;``-joined), ``fast`` (bool), ``capabilities`` (the capability version of the library that wrote a
+            difference, ``<12 hex>/<core version>``; empty for a full model), ``triple_count`` (int),
+            ``chain_depth`` (int) and ``created``
         """
         return create_data_frame_from_series_array(
             _pp.get_rdf_db_models(self._check_open(), _check_scenario(scenario)))

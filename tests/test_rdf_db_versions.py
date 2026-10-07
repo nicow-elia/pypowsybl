@@ -199,6 +199,11 @@ def test_catalog_dataframes(rdf_db_url: str, scenario: str) -> None:
         assert models['scenario'].unique().tolist() == [scenario]
         diffs = models[models['kind'] == 'diff']
         assert not diffs.empty and bool(diffs['fast'].all()), 'an SSH-only change is a fast-route difference'
+        # the capability version is read from a resource of the core library; the native image must carry it, or
+        # every difference reads 'unknown' and every reader re-checks it
+        assert diffs['capabilities'].str.fullmatch(r'[0-9a-f]{12}/\d+\.\d+\.\d+(-\w+)?').all(), \
+            diffs['capabilities'].tolist()
+        assert (models[models['kind'] == 'full']['capabilities'] == '').all()
 
         scenarios = db.scenarios()
         assert scenarios.index.name == 'scenario'

@@ -8,8 +8,10 @@
 package com.powsybl.python.network;
 
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
+import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 import com.powsybl.cgmes.rdfdb.RdfDbConnection;
 import com.powsybl.cgmes.rdfdb.SnapshotInfo;
+import com.powsybl.cgmes.rdfdb.StoredModel;
 import com.powsybl.commons.PowsyblException;
 import com.powsybl.commons.datasource.MemDataSource;
 import com.powsybl.commons.datasource.ReadOnlyDataSource;
@@ -833,8 +835,12 @@ class RdfDbUtilVersionedTest {
             assertEquals(List.of("timestamp", "modelling_authority", "root", "head", "version_count", "pin"),
                     columns(RdfDbUtil.timestampsMapper(), RdfDbUtil.timestamps(db, S, null)));
             assertEquals(List.of("id", "scenario", "subset", "kind", "version", "supersedes", "depends_on", "fast",
-                            "triple_count", "chain_depth", "created"),
+                            "capabilities", "triple_count", "chain_depth", "created"),
                     columns(RdfDbUtil.modelsMapper(), RdfDbUtil.models(db, S)));
+            assertThat(RdfDbUtil.models(db, S)).filteredOn(StoredModel::isDiff).isNotEmpty()
+                    .allMatch(model -> model.capabilities().equals(FastRouteCapabilities.version()),
+                            "every stored difference names the capability version of its writer");
+            assertThat(FastRouteCapabilities.version()).matches("[0-9a-f]{12}/\\d+\\.\\d+\\.\\d+.*");
             assertFalse(RdfDbUtil.snapshots(db, "never-uploaded").iterator().hasNext(),
                     "an unknown scenario lists nothing rather than failing");
             assertThat(RdfDbUtil.timestamps(db, "never-uploaded", null)).isEmpty();
