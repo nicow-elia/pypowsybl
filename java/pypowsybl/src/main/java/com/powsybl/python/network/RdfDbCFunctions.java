@@ -678,4 +678,37 @@ public final class RdfDbCFunctions {
             }
         });
     }
+
+    // ------------------------------------------------------------------ several authorities as one network
+
+    @CEntryPoint(name = "loadComposedNetworkFromRdfDb")
+    public static ObjectHandle loadComposedNetworkFromRdfDb(IsolateThread thread, ObjectHandle dbHandle,
+                                                            CCharPointer scenarioPtr, CCharPointer versionPtr,
+                                                            boolean exact, CCharPointer timestampPtr,
+                                                            CCharPointerPointer authoritiesPtr, int authoritiesCount,
+                                                            CCharPointerPointer ownedPtr, int ownedCount,
+                                                            CCharPointerPointer profilesPtr, int profilesCount,
+                                                            CCharPointerPointer parameterNamesPtr,
+                                                            int parameterNamesCount,
+                                                            CCharPointerPointer parameterValuesPtr,
+                                                            int parameterValuesCount,
+                                                            ObjectHandle reportNodeHandle,
+                                                            boolean allowVariantMultiThreadAccess,
+                                                            ExceptionHandlerPointer exceptionHandlerPtr) {
+        return doCatch(exceptionHandlerPtr, new PointerProvider<>() {
+            @Override
+            public ObjectHandle get() {
+                Map<String, String> parameters = CTypeUtil.toStringMap(parameterNamesPtr, parameterNamesCount,
+                        parameterValuesPtr, parameterValuesCount);
+                Network network = RdfDbUtil.loadComposed(connection(dbHandle), CTypeUtil.toString(scenarioPtr),
+                        orNull(versionPtr), exact, orNull(timestampPtr),
+                        CTypeUtil.toStringList(authoritiesPtr, authoritiesCount),
+                        CTypeUtil.toStringList(ownedPtr, ownedCount),
+                        CTypeUtil.toStringList(profilesPtr, profilesCount), parameters,
+                        ReportCUtils.getReportNode(reportNodeHandle));
+                network.getVariantManager().allowVariantMultiThreadAccess(allowVariantMultiThreadAccess);
+                return ObjectHandles.getGlobal().create(network);
+            }
+        });
+    }
 }

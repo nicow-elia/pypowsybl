@@ -108,6 +108,10 @@ public final class RdfDbUtil {
     public static final String VERSION = "version";
     /** Column of the rank the version registry gives a version. */
     public static final String RANK = "rank";
+    /** Key of the modelling authorities a composed network was loaded from, in precedence order, {@code ;} joined. */
+    public static final String COMPOSITION = "composition";
+    /** Key of the modelling authorities whose trees a composed network writes its changes into, {@code ;} joined. */
+    public static final String OWNED = "owned";
     /** Key of the variant an update created or moved, empty when the update was not a variant operation. */
     public static final String VARIANT = "variant";
 
@@ -1001,6 +1005,40 @@ public final class RdfDbUtil {
     }
 
     /**
+     * Load the trees of several modelling authorities at one moment as one network: a common grid model.
+     *
+     * <p>Every authority is resolved at the moment and version (the highest ranking version at or below it, exactly
+     * it with {@code exact}); one that holds no snapshot there is refused. Where two authorities state the same
+     * property of the same object, the first one listed wins. The network is read-only for the diff and variant
+     * routes; changes recorded on it are written into the trees of the {@code owned} authorities, routed by owner.</p>
+     *
+     * @param db          the open connection
+     * @param scenario    the scenario
+     * @param version     the version name, {@code null} for the head of each tree
+     * @param exact       whether every tree is read at exactly {@code version}
+     * @param timestamp   the moment, {@code null} or empty for each tree's base timestamp
+     * @param authorities the modelling authorities, in precedence order
+     * @param owned       the authorities whose trees changes are written into, empty for the first one
+     * @param profiles    the profiles to load, empty for every profile
+     * @param parameters  the CGMES import parameters
+     * @param reportNode  where the load reports, may be {@code null}
+     * @return the network
+     */
+    public static Network loadComposed(RdfDbConnection db, String scenario, String version, boolean exact,
+                                       String timestamp, List<String> authorities, List<String> owned,
+                                       List<String> profiles, Map<String, String> parameters,
+                                       ReportNode reportNode) {
+        requireScenario(scenario);
+        if (authorities == null || authorities.isEmpty()) {
+            throw new PowsyblException("a composition names the modelling authorities it is made of");
+        }
+        SnapshotRef moment = ref(scenario, null, toInstant(timestamp), version, exact);
+        return RdfDbNetworkLoader.loadComposed(db, moment, authorities,
+                owned == null || owned.isEmpty() ? null : owned, toProfiles(profiles), NetworkFactory.findDefault(),
+                toProperties(parameters), orNoOp(reportNode)).network();
+    }
+
+    /**
      * Bring a network to a snapshot, or replace its profiles from the unversioned graphs of a scenario.
      *
      * <p>On a versioned scenario the network is brought to the addressed snapshot; the profiles are then the
@@ -1695,6 +1733,11 @@ public final class RdfDbUtil {
         if (provenance != null) {
             identity.put(SCENARIO, provenance.scenario());
             provenance.snapshot().ifPresent(iri -> putAddress(identity, iri));
+            if (!provenance.composition().isEmpty()) {
+                identity.put(COMPOSITION, provenance.composition().stream().map(SnapshotInfo::modellingAuthority)
+                        .collect(Collectors.joining(";")));
+                identity.put(OWNED, String.join(";", provenance.owned()));
+            }
             provenance.modelIds().forEach(identity::put);
         }
         CgmesMetadataModels models = network.getExtension(CgmesMetadataModels.class);

@@ -10,6 +10,7 @@ package com.powsybl.python.network;
 import com.powsybl.cgmes.conformity.CgmesConformity1Catalog;
 import com.powsybl.cgmes.conversion.diff.FastRouteCapabilities;
 import com.powsybl.cgmes.rdfdb.RdfDbConnection;
+import com.powsybl.cgmes.rdfdb.RdfDbProvenance;
 import com.powsybl.cgmes.rdfdb.SnapshotInfo;
 import com.powsybl.cgmes.rdfdb.StoredModel;
 import com.powsybl.commons.PowsyblException;
@@ -28,6 +29,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Properties;
 import java.util.function.BinaryOperator;
 import java.util.function.Function;
 import java.util.regex.Matcher;
@@ -530,6 +532,68 @@ class RdfDbUtilVersionedTest {
             RdfDbUtil.setArchiveCutoff(db, S, null, null);
             assertEquals(Map.of("cutoff", "", "location", ""), RdfDbUtil.archiveCutoff(db, S));
             assertThat(load(db, S, null, T0815).getLoads()).isNotEmpty();
+        }
+    }
+
+    /**
+     * Two IGMs of one moment load as one network with the tie lines a file import of the assembled model gives; the
+     * identity names the composition; changes are routed to the owned tree and refused for another one; the network
+     * is never updated in place.
+     */
+    @Test
+    void aCommonGridModelLoadsAsOneNetwork() {
+        try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
+            RdfDbUtil.loadCgmes(db, microGridBe(), S, "1", null, BE, List.of(), importParameters(), null);
+            RdfDbUtil.loadCgmes(db, CgmesConformity1Catalog.microGridBaseCaseNL().dataSource(), S, "1", null, NL,
+                    List.of(), importParameters(), null);
+            Network cgm = RdfDbUtil.loadComposed(db, S, null, false, null, List.of(BE, NL), List.of(), List.of(),
+                    importParameters(), null);
+            Properties flat = importProperties();
+            flat.put("iidm.import.cgmes.cgm-with-subnetworks", "false");
+            Network assembled = Network.read(CgmesConformity1Catalog.microGridBaseCaseAssembled().dataSource(), flat);
+            assertThat(cgm.getTieLineCount()).isPositive().isEqualTo(assembled.getTieLineCount());
+            assertEquals(assembled.getLoadCount(), cgm.getLoadCount());
+            assertEquals(assembled.getGeneratorCount(), cgm.getGeneratorCount());
+
+            Map<String, String> identity = RdfDbUtil.identity(cgm, null, null);
+            assertEquals(BE + ";" + NL, identity.get(RdfDbUtil.COMPOSITION));
+            assertEquals(BE, identity.get(RdfDbUtil.OWNED), "the first authority by default");
+            assertFalse(identity.containsKey(RdfDbUtil.SNAPSHOT), "a composition is no single snapshot");
+
+            assertThatThrownBy(() -> RdfDbUtil.update(cgm, db, S, null, false, null, BE, List.of(), Map.of(),
+                    importParameters(), null))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("is a composition of");
+
+            RdfDbProvenance provenance = cgm.getExtension(RdfDbProvenance.class);
+            Load beLoad = cgm.getLoadStream().filter(l -> provenance.ownerOf(l.getId()).orElse("").equals(BE))
+                    .findFirst().orElseThrow();
+            Load nlLoad = cgm.getLoadStream().filter(l -> provenance.ownerOf(l.getId()).orElse("").equals(NL))
+                    .findFirst().orElseThrow();
+            NetworkEventRecording recording = new NetworkEventRecording(cgm);
+            recording.start();
+            beLoad.setP0(77.0);
+            recording.stop();
+            assertThat(RdfDbUtil.exportRecording(recording, db, S, null, null, null, List.of(), Map.of()))
+                    .isNotEmpty();
+            assertEquals(List.of("1", "2"), RdfDbUtil.versions(db, S, null, BE).stream()
+                    .map(SnapshotInfo::version).toList(), "the owned tree grew");
+            assertEquals(List.of("1"), RdfDbUtil.versions(db, S, null, NL).stream()
+                    .map(SnapshotInfo::version).toList());
+            assertEquals(77.0, RdfDbUtil.load(db, S, null, false, null, BE, List.of(), importParameters(), List.of(),
+                    null).getLoad(beLoad.getId()).getP0(), 1e-9);
+
+            NetworkEventRecording other = new NetworkEventRecording(cgm);
+            other.start();
+            nlLoad.setP0(88.0);
+            other.stop();
+            assertThatThrownBy(() -> RdfDbUtil.exportRecording(other, db, S, null, null, null, List.of(), Map.of()))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("which this composed network does not own");
+            assertThatThrownBy(() -> RdfDbUtil.loadComposed(db, S, null, false, null, List.of(), List.of(),
+                    List.of(), importParameters(), null))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("names the modelling authorities");
         }
     }
 

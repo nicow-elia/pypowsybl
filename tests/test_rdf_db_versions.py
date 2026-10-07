@@ -1108,3 +1108,74 @@ def test_archive_cutoff(rdf_db_url: str, scenario: str) -> None:
         assert db.archive_cutoff(scenario) is None
         assert not pp.network.from_rdf_db(db, scenario, '1', parameters=PARAMS).get_loads().empty
 
+
+
+def _loads_doubled(source: io.BytesIO) -> io.BytesIO:
+    """The instance files of ``source`` with the active power of every energy consumer doubled."""
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(source) as archive, zipfile.ZipFile(buffer, 'w', zipfile.ZIP_DEFLATED) as target:
+        for entry in archive.namelist():
+            content = archive.read(entry).decode('utf-8')
+            if '_SSH' in entry:
+                content = re.sub(r'(<cim:EnergyConsumer\.p>)(-?[0-9.eE+]+)(</cim:EnergyConsumer\.p>)',
+                                 lambda m: f'{m.group(1)}{2 * float(m.group(2))}{m.group(3)}', content)
+            target.writestr(entry, content)
+    buffer.seek(0)
+    return buffer
+
+
+def test_composed_load_and_write_back(rdf_db_url: str, scenario: str) -> None:
+    """
+    ``authorities=[...]`` loads several trees of one moment as one network, the first authority winning where two
+    state the same property; the identity names the composition; changes go into the owned tree and a change of
+    another authority's object is refused; the network is never updated in place.
+    """
+    other = 'http://tennet.nl/CGMES'
+    with pp.network.connect(rdf_db_url) as db:
+        _root(db, scenario)
+        db.load_cgmes_from_binary_buffers([_loads_doubled(other_tso_zip('-' + scenario))], scenario, '1', None, other,
+                                          parameters=PARAMS)
+        alone = pp.network.from_rdf_db(db, scenario, '1', None, AUTHORITY, parameters=PARAMS)
+        load = first_id(alone.get_loads())
+        p0 = float(alone.get_loads().loc[load, 'p0'])
+
+        composed = pp.network.from_rdf_db(db, scenario, authorities=[AUTHORITY, other], parameters=PARAMS)
+        assert float(composed.get_loads().loc[load, 'p0']) == pytest.approx(p0), 'the first authority wins'
+        assert len(composed.get_loads()) == len(alone.get_loads())
+        reverse = pp.network.from_rdf_db(db, scenario, '1', authorities=[other, AUTHORITY], parameters=PARAMS)
+        assert float(reverse.get_loads().loc[load, 'p0']) == pytest.approx(2 * p0)
+
+        identity = composed.rdf_db_identity()
+        assert identity['composition'] == f'{AUTHORITY};{other}' and identity['owned'] == AUTHORITY
+        assert 'snapshot' not in identity, 'a composition is no single snapshot'
+        with pytest.raises(PyPowsyblError, match='is a composition of'):
+            composed.update_from_rdf_db(db, scenario, '1', None, AUTHORITY)
+
+        with composed.event_recorder() as recorder:
+            composed.update_loads(id=load, p0=555.0)
+            assert recorder.to_rdf_updates(db, scenario)
+        assert db.versions(scenario, None, AUTHORITY)['version'].tolist() == ['1', '2'], 'the owned tree grew'
+        assert db.versions(scenario, None, other)['version'].tolist() == ['1']
+        reread = pp.network.from_rdf_db(db, scenario, None, None, AUTHORITY, parameters=PARAMS)
+        assert float(reread.get_loads().loc[load, 'p0']) == pytest.approx(555.0)
+
+        not_owned = pp.network.from_rdf_db(db, scenario, authorities=[AUTHORITY, other], owned=[other],
+                                           parameters=PARAMS)
+        assert not_owned.rdf_db_identity()['owned'] == other
+        with not_owned.event_recorder() as recorder:
+            not_owned.update_loads(id=load, p0=556.0)
+            with pytest.raises(PyPowsyblError, match='which this composed network does not own'):
+                recorder.to_rdf_updates(db, scenario)
+        assert db.versions(scenario, None, AUTHORITY)['version'].tolist() == ['1', '2'], 'nothing was written'
+
+        with pytest.raises(ValueError, match='composition must be one of'):
+            pp.network.from_rdf_db(db, scenario, authorities=[AUTHORITY], composition='last-wins')
+        with pytest.raises(ValueError, match='give authorities'):
+            pp.network.from_rdf_db(db, scenario, owned=[AUTHORITY])
+        with pytest.raises(ValueError, match='takes neither a modelling_authority'):
+            pp.network.from_rdf_db(db, scenario, modelling_authority=AUTHORITY, authorities=[AUTHORITY])
+        with pytest.raises(TypeError, match='not one string'):
+            pp.network.from_rdf_db(db, scenario, authorities=AUTHORITY)
+        with pytest.raises(PyPowsyblError, match='holds no snapshot'):
+            pp.network.from_rdf_db(db, scenario, None, at('20:00'), authorities=[AUTHORITY, other],
+                                   parameters=PARAMS)

@@ -49,6 +49,7 @@ if TYPE_CHECKING:
 
 _QUERY_MODES = ('local', 'remote')
 _ON_REFUSAL = ('raise', 'skip')
+_COMPOSITIONS = ('first-wins',)
 
 Profile = Literal['EQ', 'SSH', 'TP', 'SV', 'DY', 'DL', 'GL', 'EQ_BD', 'TP_BD']
 """
@@ -1078,9 +1079,43 @@ def _check_refusals(network: 'Network', on_refusal: str) -> None:
         variant=str(refused.index[0]), reasons=reasons, refused=refused)
 
 
+def _load_composed(db: RdfDatabase, scenario: str, version: Optional[str],  # pylint: disable=too-many-arguments
+                   timestamp: Optional[datetime.datetime], modelling_authority: Optional[str], profiles: List[str],
+                   exact: bool, authorities: Optional[Sequence[str]], owned: Optional[Sequence[str]],
+                   composition: str, timestamps: Optional[Sequence[datetime.datetime]],
+                   variants: Optional[Mapping[str, Union[datetime.datetime, SnapshotAddress]]],
+                   parameters: Optional[Dict[str, str]], post_processors: Optional[List[str]],
+                   report_node: Optional[ReportNode], allow_variant_multi_thread_access: bool) -> 'Network':
+    """The ``authorities=[...]`` form of :func:`from_rdf_db`: several trees of one moment as one network."""
+    from .network import Network  # pylint: disable=import-outside-toplevel,cyclic-import
+    if composition not in _COMPOSITIONS:
+        raise ValueError(f'composition must be one of {list(_COMPOSITIONS)}, got {composition!r}')
+    if authorities is None:
+        raise ValueError('owned= names the trees a composed network writes into: give authorities=[...] too')
+    if modelling_authority is not None or timestamps is not None or variants is not None:
+        raise ValueError('authorities=[...] loads several trees as one network; it takes neither a '
+                         'modelling_authority, timestamps nor variants')
+    if post_processors:
+        raise ValueError('post_processors are not supported when loading a composition')
+    names = []
+    for group, values in (('authorities', authorities), ('owned', owned or [])):
+        if isinstance(values, str):
+            raise TypeError(f'{group} takes a sequence of modelling authorities, for instance [{values!r}], not '
+                            'one string')
+        names.append([_authority_to_str(value) for value in values])
+    if not names[0]:
+        raise ValueError('authorities=[...] names the modelling authorities the network is composed of')
+    return Network(_pp.load_composed_network_from_rdf_db(
+        db._check_open(), scenario, _version_to_str(version), exact,  # pylint: disable=protected-access
+        _timestamp_to_str(timestamp), names[0], names[1], profiles, {} if parameters is None else parameters,
+        _report_handle(report_node), allow_variant_multi_thread_access))
+
+
 def from_rdf_db(db: RdfDatabase, scenario: str, version: Optional[str] = None,
                 timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
                 profiles: Optional[Sequence[str]] = None, *, exact: bool = False,
+                authorities: Optional[Sequence[str]] = None, owned: Optional[Sequence[str]] = None,
+                composition: str = 'first-wins',
                 timestamps: Optional[Sequence[datetime.datetime]] = None,
                 variants: Optional[Mapping[str, Union[datetime.datetime, SnapshotAddress]]] = None,
                 on_refusal: str = 'raise', parameters: Optional[Dict[str, str]] = None,
@@ -1091,8 +1126,9 @@ def from_rdf_db(db: RdfDatabase, scenario: str, version: Optional[str] = None,
 
     The network is the one the instance files themselves would have produced. One consequence of loading from a
     database rather than from files: a combined grid model is *not* split into subnetworks, because that split
-    happens at file level, above any triple store. Every modelling authority of a scenario is a tree of its own and
-    is loaded on its own; :meth:`RdfDatabase.assembly` lists what a common grid model of one moment is made of.
+    happens at file level, above any triple store. Every modelling authority of a scenario is a tree of its own;
+    :meth:`RdfDatabase.assembly` lists what a common grid model of one moment is made of, and ``authorities=[...]``
+    loads it as **one** network.
 
     ``version``, ``timestamp`` and ``modelling_authority`` address a snapshot inside the scenario:
     ``(scenario, None, None)`` is the newest version of the base timestamp, ``(scenario, None, t)`` the newest
@@ -1123,6 +1159,16 @@ def from_rdf_db(db: RdfDatabase, scenario: str, version: Optional[str] = None,
             With ``timestamps``/``variants`` they are the profiles each variant is brought forward by
         exact: read exactly ``version`` (and every named version of ``variants``) instead of the highest ranking
             version at or below it; a timestamp that does not hold it is an error. Needs a ``version``
+        authorities: load the trees of these modelling authorities at ``(version, timestamp)`` as **one** network -
+            a common grid model, with the tie lines a file import of the assembled model gives. Each is resolved at
+            the moment (the highest ranking version at or below ``version``); one that holds no snapshot there is
+            refused. Exclusive with ``modelling_authority``, ``timestamps`` and ``variants``. The network is
+            read-only for :meth:`Network.update_from_rdf_db` and the variant operations;
+            :meth:`NetworkEventRecorder.to_rdf_updates` writes its changes into the trees they belong to
+        owned: the authorities whose trees changes are written into; ``None`` is the first one. A change on an object
+            of an authority not owned is refused before anything is written
+        composition: what wins where two authorities state the same property of the same object; ``'first-wins'``
+            (in ``authorities`` order) is the only rule
         timestamps: load these timestamps as the variants of one network, each at ``version`` in the tree of
             ``modelling_authority``. The variants are named after their ISO instant (``'2021-02-09T08:30:00Z'``).
             That is the short form of the default naming of the core library, which says ``version@instant`` when
@@ -1189,6 +1235,12 @@ def from_rdf_db(db: RdfDatabase, scenario: str, version: Optional[str] = None,
     profile_list = _profiles_to_list(profiles)
     if exact and version is None and timestamps is None and variants is None:
         raise ValueError('exact=True reads exactly the named version: give a version')
+    if authorities is not None or owned is not None:
+        return _load_composed(db, scenario, version, timestamp, modelling_authority, profile_list, exact,
+                              authorities, owned, composition, timestamps, variants, parameters, post_processors,
+                              report_node, allow_variant_multi_thread_access)
+    if composition not in _COMPOSITIONS:
+        raise ValueError(f'composition must be one of {list(_COMPOSITIONS)}, got {composition!r}')
     if timestamps is None and variants is None:
         return Network(_pp.load_network_from_rdf_db(db._check_open(),  # pylint: disable=protected-access
                                                     scenario, _version_to_str(version), exact,

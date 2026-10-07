@@ -1987,6 +1987,27 @@ std::map<std::string, std::string> getRdfDbArchiveCutoff(const JavaHandle& db, c
     return convertMapStructToStdMap(cutoff);
 }
 
+JavaHandle loadComposedNetworkFromRdfDb(const JavaHandle& db, const std::string& scenario, const std::string& version,
+                                        bool exact, const std::string& timestamp,
+                                        const std::vector<std::string>& authorities,
+                                        const std::vector<std::string>& owned,
+                                        const std::vector<std::string>& profiles,
+                                        const std::map<std::string, std::string>& parameters,
+                                        JavaHandle* reportNode, bool allowVariantMultiThreadAccess) {
+    StringMapArgs args(parameters);
+    ToCharPtrPtr authoritiesPtr(authorities);
+    ToCharPtrPtr ownedPtr(owned);
+    ToCharPtrPtr profilesPtr(profiles);
+    return PowsyblCaller::get()->callJava<JavaHandle>(::loadComposedNetworkFromRdfDb, db, (char*) scenario.data(),
+                                                      (char*) version.data(), exact, (char*) timestamp.data(),
+                                                      authoritiesPtr.get(), authorities.size(),
+                                                      ownedPtr.get(), owned.size(),
+                                                      profilesPtr.get(), profiles.size(),
+                                                      args.keys(), args.size(), args.values(), args.size(),
+                                                      (reportNode == nullptr) ? nullptr : *reportNode,
+                                                      allowVariantMultiThreadAccess);
+}
+
 JavaHandle createFlowDecomposition() {
     return PowsyblCaller::get()->callJava<JavaHandle>(::createFlowDecomposition);
 }

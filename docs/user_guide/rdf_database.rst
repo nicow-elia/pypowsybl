@@ -225,8 +225,7 @@ timestamps, its versions - and all of them share the scenario's boundary. A scen
 usual case, never needs to name it: ``None`` resolves to the one there is. :meth:`RdfDatabase.modelling_authorities`
 lists them, and :meth:`RdfDatabase.assembly` answers which snapshot every authority has at one moment - one row
 per authority, an empty one where an authority has no snapshot then - which is what a common grid model is
-assembled from. Loading that assembly as *one* network is not supported: load each row and
-merge.
+assembled from; ``authorities=[...]`` loads it as one network (see `Loading a CGM at once`_).
 
 ``profiles`` is **not** part of the address. It is the projection of a call - which profiles it loads, updates,
 stores or compares - and ``None`` is each call's default. A profile is a name: the nine the CGMES conversion reads
@@ -424,6 +423,28 @@ for what holds at the second snapshot, ``reverse`` for what held at the first::
 
     changes = db.changes_between('2021-02-09', t1200, t1215)
     changes[changes['side'] == 'forward']
+
+Loading a CGM at once
+---------------------
+
+:func:`from_rdf_db` with ``authorities=[...]`` loads the trees of several modelling authorities at one moment as
+**one** network - the common grid model, with the tie lines a file import of the assembled model gives::
+
+    cgm = pp.network.from_rdf_db(db, '2021-02-09', 'ID', t, authorities=[elia, tennet])
+
+Each authority is resolved at the moment and version as an ordinary read is (the highest ranking version at or
+below it, exactly it with ``exact=True``); one that holds no snapshot there is refused - a CGM with a missing IGM is
+not a CGM. The boundary is read once, every tree is brought onto one set of identifiers, and where two authorities
+state the same property of the same object the **first one listed wins** (``composition='first-wins'``, the only
+rule). The network has no single snapshot: :meth:`Network.rdf_db_identity` answers ``composition`` (the authorities
+in precedence order) and ``owned``; its id is the one of the equipment models.
+
+Changes recorded on it are written back by the ordinary :meth:`NetworkEventRecorder.to_rdf_updates`: each change goes
+into the tree of the authority that owns the object, as a new version of that tree. Only the trees named in
+``owned=`` are written (``None``: the first authority); a change of an object of another authority is refused before
+anything is written (*"the change on <mRID> belongs to modelling authority 'X', which this composed network does not
+own (owned: [...]); nothing was written"*). A composed network is read-only for :meth:`Network.update_from_rdf_db`
+and the variant operations: load it again for another moment.
 
 Archiving the states before a cutoff
 ------------------------------------
@@ -811,10 +832,9 @@ For a real database, start one and point the notebooks at it::
 Limitations
 -----------
 
-* A combined grid model is not loaded as one network. Each modelling authority is a tree of its own in the
-  scenario, sharing the boundary; :meth:`RdfDatabase.assembly` answers which snapshot every authority has at one
-  moment, and each of them is loaded on its own. A network loaded from one tree is the sender of differences for
-  that tree only.
+* A combined grid model loads as one flat network (``authorities=[...]``), never with subnetworks, and its network
+  id is one of the equipment model ids. It is read-only for updates and variants; custom profiles are not composed.
+  A write-back that touches two owned trees writes two snapshots, one after the other, not in one transaction.
 * Authentication is HTTP basic (``user``/``password``) or a custom header (``headers=``). Nothing else is wired up.
 * Restricting a load to some profiles is honoured against a real server; on the ``memory:`` backend a remote-mode
   load always sees the whole scenario.

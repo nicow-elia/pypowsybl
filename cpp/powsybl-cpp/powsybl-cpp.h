@@ -1131,6 +1131,18 @@ void setRdfDbArchiveCutoff(const JavaHandle& db, const std::string& scenario, co
 
 std::map<std::string, std::string> getRdfDbArchiveCutoff(const JavaHandle& db, const std::string& scenario);
 
+/**
+ * The trees of several modelling authorities at one moment as one network, the first authority winning where two
+ * state the same property; owned names the trees changes are written into (empty: the first one).
+ */
+JavaHandle loadComposedNetworkFromRdfDb(const JavaHandle& db, const std::string& scenario, const std::string& version,
+                                        bool exact, const std::string& timestamp,
+                                        const std::vector<std::string>& authorities,
+                                        const std::vector<std::string>& owned,
+                                        const std::vector<std::string>& profiles,
+                                        const std::map<std::string, std::string>& parameters,
+                                        JavaHandle* reportNode, bool allowVariantMultiThreadAccess);
+
 JavaHandle createGLSKdocument(std::string& filename);
 
 std::vector<std::string> getGLSKinjectionkeys(pypowsybl::JavaHandle network, const JavaHandle& importer, std::string& country, long instant);

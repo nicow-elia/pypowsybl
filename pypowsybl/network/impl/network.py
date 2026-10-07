@@ -456,7 +456,9 @@ class Network:  # pylint: disable=too-many-public-methods
 
         Returns:
             a dictionary that may hold ``scenario``, ``snapshot`` (the snapshot IRI), ``modelling_authority``,
-            ``timestamp`` (ISO-8601 instant), ``version`` (the version name) and one entry per CGMES profile (``'EQ'``, ``'SSH'``, ...) naming the model it is at. Empty
+            ``timestamp`` (ISO-8601 instant), ``version`` (the version name), for a network loaded with
+            ``authorities=[...]`` ``composition`` and ``owned`` (``;``-joined modelling authorities, in precedence
+            order; such a network has no single ``snapshot``) and one entry per CGMES profile (``'EQ'``, ``'SSH'``, ...) naming the model it is at. Empty
             when the network has no CGMES identity at all.
 
         Raises:

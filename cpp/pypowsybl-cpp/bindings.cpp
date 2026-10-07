@@ -1331,6 +1331,11 @@ PYBIND11_MODULE(_pypowsybl, m) {
           py::arg("location"));
     m.def("get_rdf_db_archive_cutoff", &pypowsybl::getRdfDbArchiveCutoff, "The archive cutoff of a scenario",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"));
+    m.def("load_composed_network_from_rdf_db", &pypowsybl::loadComposedNetworkFromRdfDb,
+          "Load the trees of several modelling authorities at one moment as one network",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("version"),
+          py::arg("exact"), py::arg("timestamp"), py::arg("authorities"), py::arg("owned"), py::arg("profiles"),
+          py::arg("parameters"), py::arg("report_node"), py::arg("allow_variant_multi_thread_access"));
     m.def("create_glsk_document", &pypowsybl::createGLSKdocument, "Create a glsk importer.", py::arg("filename"));
 
     m.def("get_glsk_injection_keys", &pypowsybl::getGLSKinjectionkeys, "Get glsk injection keys available for a country", py::arg("network"), py::arg("importer"), py::arg("country"), py::arg("instant"));
