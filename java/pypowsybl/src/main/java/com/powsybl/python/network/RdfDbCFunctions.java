@@ -73,6 +73,11 @@ public final class RdfDbCFunctions {
         return value == null || value.isEmpty() ? null : value;
     }
 
+    private static RdfDbUtil.PinArgs pin(boolean hasPin, CCharPointer versionPtr, CCharPointer timestampPtr,
+                                         CCharPointer authorityPtr) {
+        return hasPin ? new RdfDbUtil.PinArgs(orNull(versionPtr), orNull(timestampPtr), orNull(authorityPtr)) : null;
+    }
+
     @CEntryPoint(name = "createRdfDbConnection")
     public static ObjectHandle createRdfDbConnection(IsolateThread thread, CCharPointer urlPtr,
                                                      CCharPointerPointer optionKeysPtr, int optionKeysCount,
@@ -132,7 +137,10 @@ public final class RdfDbCFunctions {
                                                                      CCharPointer timestampPtr,
                                                                      CCharPointer modellingAuthorityPtr,
                                                                      CCharPointerPointer profilesPtr,
-                                                                     int profilesCount,
+                                                                     int profilesCount, boolean hasPin,
+                                                                     CCharPointer pinVersionPtr,
+                                                                     CCharPointer pinTimestampPtr,
+                                                                     CCharPointer pinAuthorityPtr,
                                                                      CCharPointerPointer parameterNamesPtr,
                                                                      int parameterNamesCount,
                                                                      CCharPointerPointer parameterValuesPtr,
@@ -149,7 +157,8 @@ public final class RdfDbCFunctions {
                 ReportNode reportNode = ReportCUtils.getReportNode(reportNodeHandle);
                 return Util.createCharPtrArray(RdfDbUtil.loadCgmes(connection(dbHandle), ds, scenario,
                         orNull(versionPtr), orNull(timestampPtr), orNull(modellingAuthorityPtr),
-                        CTypeUtil.toStringList(profilesPtr, profilesCount), parameters, reportNode));
+                        CTypeUtil.toStringList(profilesPtr, profilesCount),
+                        pin(hasPin, pinVersionPtr, pinTimestampPtr, pinAuthorityPtr), parameters, reportNode));
             }
         });
     }
@@ -164,7 +173,10 @@ public final class RdfDbCFunctions {
                                                                             CCharPointer timestampPtr,
                                                                             CCharPointer modellingAuthorityPtr,
                                                                             CCharPointerPointer profilesPtr,
-                                                                            int profilesCount,
+                                                                            int profilesCount, boolean hasPin,
+                                                                            CCharPointer pinVersionPtr,
+                                                                            CCharPointer pinTimestampPtr,
+                                                                            CCharPointer pinAuthorityPtr,
                                                                             CCharPointerPointer parameterNamesPtr,
                                                                             int parameterNamesCount,
                                                                             CCharPointerPointer parameterValuesPtr,
@@ -181,7 +193,8 @@ public final class RdfDbCFunctions {
                 ReportNode reportNode = ReportCUtils.getReportNode(reportNodeHandle);
                 return Util.createCharPtrArray(RdfDbUtil.loadCgmes(connection(dbHandle), ds, scenario,
                         orNull(versionPtr), orNull(timestampPtr), orNull(modellingAuthorityPtr),
-                        CTypeUtil.toStringList(profilesPtr, profilesCount), parameters, reportNode));
+                        CTypeUtil.toStringList(profilesPtr, profilesCount),
+                        pin(hasPin, pinVersionPtr, pinTimestampPtr, pinAuthorityPtr), parameters, reportNode));
             }
         });
     }
@@ -403,7 +416,10 @@ public final class RdfDbCFunctions {
                                                                                CCharPointer timestampPtr,
                                                                                CCharPointer modellingAuthorityPtr,
                                                                                CCharPointerPointer profilesPtr,
-                                                                               int profilesCount,
+                                                                               int profilesCount, boolean hasPin,
+                                                                               CCharPointer pinVersionPtr,
+                                                                               CCharPointer pinTimestampPtr,
+                                                                               CCharPointer pinAuthorityPtr,
                                                                                CCharPointerPointer optionKeysPtr,
                                                                                int optionKeysCount,
                                                                                CCharPointerPointer optionValuesPtr,
@@ -418,7 +434,7 @@ public final class RdfDbCFunctions {
                 return Util.createCharPtrArray(RdfDbUtil.exportRecording(recording, connection(dbHandle),
                         CTypeUtil.toString(scenarioPtr), orNull(versionPtr), orNull(timestampPtr),
                         orNull(modellingAuthorityPtr), CTypeUtil.toStringList(profilesPtr, profilesCount),
-                        options));
+                        pin(hasPin, pinVersionPtr, pinTimestampPtr, pinAuthorityPtr), options));
             }
         });
     }
@@ -580,6 +596,57 @@ public final class RdfDbCFunctions {
                 return Dataframes.createCDataframe(RdfDbUtil.statementsMapper(),
                         RdfDbUtil.fetchGraph(connection(dbHandle), CTypeUtil.toString(scenarioPtr),
                                 CTypeUtil.toString(graphPtr)));
+            }
+        });
+    }
+
+    // ------------------------------------------------------------------ rollovers, dropping, changes
+
+    @CEntryPoint(name = "rolloverRdfDbSnapshot")
+    public static CCharPointer rolloverRdfDbSnapshot(IsolateThread thread, ObjectHandle dbHandle,
+                                                     CCharPointer scenarioPtr, CCharPointer versionPtr, boolean exact,
+                                                     CCharPointer timestampPtr, CCharPointer modellingAuthorityPtr,
+                                                     ExceptionHandlerPointer exceptionHandlerPtr) {
+        return doCatch(exceptionHandlerPtr, new PointerProvider<>() {
+            @Override
+            public CCharPointer get() {
+                return CTypeUtil.toCharPtr(RdfDbUtil.rollover(connection(dbHandle), CTypeUtil.toString(scenarioPtr),
+                        orNull(versionPtr), exact, orNull(timestampPtr), orNull(modellingAuthorityPtr)));
+            }
+        });
+    }
+
+    @CEntryPoint(name = "dropRdfDbTimestamp")
+    public static ArrayPointer<CCharPointerPointer> dropRdfDbTimestamp(IsolateThread thread, ObjectHandle dbHandle,
+                                                                       CCharPointer scenarioPtr,
+                                                                       CCharPointer timestampPtr,
+                                                                       CCharPointer modellingAuthorityPtr,
+                                                                       ExceptionHandlerPointer exceptionHandlerPtr) {
+        return doCatch(exceptionHandlerPtr, new PointerProvider<>() {
+            @Override
+            public ArrayPointer<CCharPointerPointer> get() {
+                return Util.createCharPtrArray(RdfDbUtil.dropTimestamp(connection(dbHandle),
+                        CTypeUtil.toString(scenarioPtr), orNull(timestampPtr), orNull(modellingAuthorityPtr)));
+            }
+        });
+    }
+
+    @CEntryPoint(name = "getRdfDbChangesBetween")
+    public static ArrayPointer<SeriesPointer> getRdfDbChangesBetween(IsolateThread thread, ObjectHandle dbHandle,
+                                                                     CCharPointer scenarioPtr,
+                                                                     CCharPointer modellingAuthorityPtr,
+                                                                     CCharPointer fromVersionPtr,
+                                                                     CCharPointer fromTimestampPtr,
+                                                                     CCharPointer toVersionPtr,
+                                                                     CCharPointer toTimestampPtr,
+                                                                     ExceptionHandlerPointer exceptionHandlerPtr) {
+        return doCatch(exceptionHandlerPtr, new PointerProvider<>() {
+            @Override
+            public ArrayPointer<SeriesPointer> get() {
+                return Dataframes.createCDataframe(RdfDbUtil.changesMapper(),
+                        RdfDbUtil.changesBetween(connection(dbHandle), CTypeUtil.toString(scenarioPtr),
+                                orNull(modellingAuthorityPtr), orNull(fromVersionPtr), orNull(fromTimestampPtr),
+                                orNull(toVersionPtr), orNull(toTimestampPtr)));
             }
         });
     }

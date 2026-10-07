@@ -77,7 +77,7 @@ def _record(db: pp.network.RdfDatabase, network: pp.network.Network, scenario: s
 
 
 _SNAPSHOT_COLUMNS = ['scenario', 'modelling_authority', 'timestamp', 'version', 'rank', 'profiles', 'kind', 'parent',
-                     'edge', 'depth', 'has_full', 'fast', 'members', 'created', 'description']
+                     'edge', 'depth', 'has_full', 'fast', 'rollover', 'members', 'created', 'description']
 
 
 def other_tso_zip(suffix: str) -> io.BytesIO:
@@ -180,10 +180,12 @@ def test_catalog_dataframes(rdf_db_url: str, scenario: str) -> None:
 
         timestamps = db.timestamps(scenario)
         assert timestamps.index.name == 'timestamp'
-        assert list(timestamps.columns) == ['modelling_authority', 'root', 'head', 'version_count', 'pinned_base']
+        assert list(timestamps.columns) == ['modelling_authority', 'root', 'head', 'version_count', 'pin']
         assert list(timestamps.index) == [BASE, at('20:30')]
         assert sorted(timestamps['version_count']) == [1, 2]
-        assert timestamps.loc[BASE, 'pinned_base'] == ''
+        assert timestamps.loc[BASE, 'pin'] == ''
+        assert timestamps.loc[at('20:30'), 'pin'] == timestamps.loc[BASE, 'head'], 'the sender was at the root'
+        assert snapshots['rollover'].dtype == bool and snapshots['rollover'].tolist().count(True) == 1
 
         versions = db.versions(scenario, at('20:30'))
         assert versions['version'].tolist() == ['1', '2']
@@ -805,6 +807,16 @@ def test_timestamps_ingested_from_files(rdf_db_url: str, scenario: str) -> None:
         iri = db.checkpoint(scenario, None, moments[-1])
         assert bool(db.snapshots(scenario).loc[iri, 'has_full'])
 
+        # Every timestamp hung off the root, the only rollover; one flagged later becomes the pin of the next ones
+        root = timestamps.loc[BASE, 'head']
+        assert db.timestamps(scenario)['pin'].tolist() == ['', root, root, root]
+        rolled = db.rollover(scenario, None, moments[-1])
+        later = at('20:45')
+        db.load_cgmes_from_binary_buffers([ssh_variant(4, later)], scenario, None, later,
+                                          modelling_authority=AUTHORITY, parameters=PARAMS)
+        assert db.timestamps(scenario).loc[later, 'pin'] == rolled
+        assert bool(db.snapshots(scenario).loc[rolled, 'rollover'])
+
         # The un-versioned upload has no place in a versioned scenario and core says so
         with pytest.raises(PyPowsyblError, match='is versioned'):
             db.load_cgmes(CGMES_ZIP, scenario, parameters=PARAMS)
@@ -983,3 +995,72 @@ def test_an_unversioned_scenario_answers_update(rdf_db_url: str, scenario: str) 
         assert network.update_from_rdf_db(db, scenario) == 'update'
         assert network.update_from_rdf_db(db, scenario, profiles=['SSH']) == 'update'
         assert network._handle is handle, 'the profile replacement is in place'  # pylint: disable=protected-access
+
+def test_pin_and_rollover(rdf_db_url: str, scenario: str) -> None:
+    """
+    A new timestamp hangs off a pin: by default the latest rollover at or before it for files, the sender's own
+    snapshot for a recorder; ``pin=`` names another one. A timestamp nothing is pinned to can be dropped.
+    """
+    with pp.network.connect(rdf_db_url) as db:
+        _root(db, scenario)
+        root = db.snapshots(scenario).index[0]
+        assert bool(db.snapshots(scenario).loc[root, 'rollover']), 'a root is a rollover'
+        db.load_cgmes_from_binary_buffers([ssh_variant(1, at('20:00'), suffix=scenario)], scenario, None,
+                                          at('20:00'), parameters=PARAMS)
+        rolled = db.rollover(scenario, None, at('20:00'))
+        assert db.rollover(scenario, None, at('20:00')) == rolled, 'idempotent'
+        flags = db.snapshots(scenario).loc[rolled]
+        assert bool(flags['rollover']) and bool(flags['has_full']), 'a rollover is checkpointed at once'
+        db.load_cgmes_from_binary_buffers([ssh_variant(2, at('20:15'), suffix=scenario)], scenario, None,
+                                          at('20:15'), parameters=PARAMS)
+        db.load_cgmes_from_binary_buffers([ssh_variant(3, at('20:30'), suffix=scenario)], scenario, None,
+                                          at('20:30'), pin=(None, None, None), parameters=PARAMS)
+        pins = db.timestamps(scenario)['pin']
+        assert pins[at('20:15')] == rolled and pins[at('20:30')] == root and pins[BASE] == ''
+        with pytest.raises(PyPowsyblError, match='already exists'):
+            db.load_cgmes_from_binary_buffers([ssh_variant(5, at('20:30'), suffix=scenario + '-x')], scenario, None,
+                                              at('20:30'), pin=BASE, parameters=PARAMS)
+
+        sender = pp.network.from_rdf_db(db, scenario, None, at('20:15'), parameters=PARAMS)
+        with sender.event_recorder() as recorder:
+            _change_a_load(sender, 701.0)
+            with pytest.raises(PyPowsyblError, match='pin'):
+                recorder.to_rdf_updates(db, scenario, None, at('20:45'), pin=at('20:00'), clear=False)
+            recorder.to_rdf_updates(db, scenario, None, at('20:45'), pin=(None, at('20:15'), AUTHORITY))
+        assert db.timestamps(scenario).loc[at('20:45'), 'pin'] == db.timestamps(scenario).loc[at('20:15'), 'head']
+        with pytest.raises(ValueError, match='takes no pin'):
+            sender.event_recorder().to_rdf_updates(db, scenario, pin=BASE, per_variant=True)
+        with pytest.raises(TypeError, match='pin is a timestamp or'):
+            db.load_cgmes_from_binary_buffers([ssh_variant(6, at('21:00'))], scenario, None, at('21:00'),
+                                              pin='20:00', parameters=PARAMS)  # type: ignore[arg-type]
+
+        with pytest.raises(PyPowsyblError, match='is the pin of'):
+            db.drop_timestamp(scenario, at('20:15'))
+        with pytest.raises(PyPowsyblError, match='base timestamp'):
+            db.drop_timestamp(scenario, BASE)
+        with pytest.raises(TypeError, match='needs a timestamp'):
+            db.drop_timestamp(scenario, None)  # type: ignore[arg-type]
+        assert len(db.drop_timestamp(scenario, at('20:45'))) == 1
+        assert len(db.drop_timestamp(scenario, at('20:15'))) == 1, 'nothing depends on it any more'
+        assert at('20:15') not in db.timestamps(scenario).index
+
+
+def test_changes_between(rdf_db_url: str, scenario: str) -> None:
+    """The changes from one snapshot to another, one row per statement: what holds after, and what held before."""
+    with pp.network.connect(rdf_db_url) as db:
+        _root(db, scenario)
+        for k, moment in ((1, at('20:00')), (2, at('20:15'))):
+            db.load_cgmes_from_binary_buffers([ssh_variant(k, moment, suffix=scenario)], scenario, None, moment,
+                                              parameters=PARAMS)
+        changes = db.changes_between(scenario, at('20:00'), at('20:15'))
+        assert list(changes.columns) == ['profile', 'subject', 'property', 'value', 'side']
+        assert set(changes['profile']) == {'SSH'} and set(changes['side']) == {'forward', 'reverse'}
+        for side, moment in (('forward', at('20:15')), ('reverse', at('20:00'))):
+            loads = pp.network.from_rdf_db(db, scenario, None, moment, parameters=PARAMS).get_loads()
+            rows = changes[(changes['side'] == side) & (changes['property'] == 'EnergyConsumer.p')]
+            assert not rows.empty
+            for subject, value in zip(rows['subject'], rows['value']):
+                assert float(value) == pytest.approx(float(loads.loc[subject, 'p0']))
+        assert db.changes_between(scenario, at('20:15'), at('20:15')).empty, 'the same snapshot changes nothing'
+        backwards = db.changes_between(scenario, at('20:15'), None)
+        assert not backwards.empty and set(backwards['side']) == {'forward', 'reverse'}

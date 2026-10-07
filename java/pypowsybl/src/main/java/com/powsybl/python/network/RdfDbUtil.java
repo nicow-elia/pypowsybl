@@ -10,6 +10,7 @@ package com.powsybl.python.network;
 import com.powsybl.cgmes.conversion.export.CgmesDiffExport;
 import com.powsybl.cgmes.extensions.CgmesMetadataModels;
 import com.powsybl.cgmes.model.CgmesSubset;
+import com.powsybl.cgmes.model.diff.DifferenceModelSet;
 import com.powsybl.cgmes.model.triplestore.CgmesTripleStoreLoader;
 import com.powsybl.cgmes.rdfdb.Checkpoint;
 import com.powsybl.cgmes.rdfdb.GraphInfo;
@@ -153,6 +154,7 @@ public final class RdfDbUtil {
                     .ints("depth", SnapshotInfo::depth)
                     .booleans("has_full", SnapshotInfo::hasFull)
                     .booleans("fast", SnapshotInfo::fast)
+                    .booleans("rollover", SnapshotInfo::rollover)
                     .strings("members", i -> String.join(";", i.members()))
                     .strings("created", i -> i.created() == null ? "" : i.created().toString())
                     .strings("description", i -> text(i.description()))
@@ -166,7 +168,7 @@ public final class RdfDbUtil {
                     .strings("root", t -> text(t.root()))
                     .strings("head", t -> text(t.head()))
                     .ints("version_count", SnapshotCatalog.TimestampInfo::versionCount)
-                    .strings("pinned_base", t -> text(t.pin()))
+                    .strings("pin", t -> text(t.pin()))
                     .build();
 
     private static final DataframeMapper<List<AssemblyRow>, Void> ASSEMBLY_MAPPER =
@@ -241,6 +243,17 @@ public final class RdfDbUtil {
                     .booleans("transient", RegistryRow::isTransient)
                     .build();
 
+    private static final DataframeMapper<List<ChangeRow>, Void> CHANGES_MAPPER =
+            new DataframeMapperBuilder<List<ChangeRow>, ChangeRow, Void>()
+                    .itemsProvider(rows -> rows)
+                    .intsIndex("index", ChangeRow::index)
+                    .strings("profile", ChangeRow::profile)
+                    .strings("subject", ChangeRow::subject)
+                    .strings("property", ChangeRow::property)
+                    .strings("value", ChangeRow::value)
+                    .strings("side", ChangeRow::side)
+                    .build();
+
     private static final DataframeMapper<List<StatementRow>, Void> STATEMENTS_MAPPER =
             new DataframeMapperBuilder<List<StatementRow>, StatementRow, Void>()
                     .itemsProvider(rows -> rows)
@@ -252,6 +265,103 @@ public final class RdfDbUtil {
                     .build();
 
     private RdfDbUtil() {
+    }
+
+    /**
+     * The address of a pin as it crosses the C API: version, timestamp and modelling authority, each {@code null}
+     * when not given. The class exists so that "no pin" ({@code null}) and "the newest version of the base
+     * timestamp" (a pin with three {@code null}s) stay apart.
+     *
+     * @param version            the version name, {@code null} for the newest one
+     * @param timestamp          the timestamp, {@code null} for the base timestamp
+     * @param modellingAuthority the modelling authority, {@code null} for the target's
+     */
+    public record PinArgs(String version, String timestamp, String modellingAuthority) {
+    }
+
+    /** The pin as a {@link SnapshotRef}, its authority defaulting to the target's, or the only one of the scenario. */
+    private static SnapshotRef pin(SnapshotCatalog catalog, PinArgs pin, String targetAuthority) {
+        if (pin == null) {
+            return null;
+        }
+        String authority = blankToNull(pin.modellingAuthority());
+        return SnapshotRef.of(catalog.scenario(), authority != null ? authority
+                : authority(catalog, targetAuthority), toInstant(pin.timestamp()), blankToNull(pin.version()));
+    }
+
+    /**
+     * Flag a snapshot as a rollover - later timestamps ingested from files hang off it by default - and checkpoint
+     * it.
+     *
+     * @return the IRI of the snapshot
+     */
+    public static String rollover(RdfDbConnection db, String scenario, String version, boolean exact,
+                                  String timestamp, String modellingAuthority) {
+        SnapshotCatalog catalog = db.snapshots(requireScenario(scenario));
+        return catalog.rollover(ref(scenario, authority(catalog, modellingAuthority), toInstant(timestamp), version,
+                exact)).iri();
+    }
+
+    /**
+     * Drop one timestamp of a tree with every version of it; refused for the base timestamp and for a timestamp
+     * another one is pinned to.
+     *
+     * @return the IRIs of the dropped snapshots, oldest first
+     */
+    public static List<String> dropTimestamp(RdfDbConnection db, String scenario, String timestamp,
+                                             String modellingAuthority) {
+        SnapshotCatalog catalog = db.snapshots(requireScenario(scenario));
+        Instant moment = toInstant(timestamp);
+        if (moment == null) {
+            throw new PowsyblException("drop_timestamp needs a timestamp: the base timestamp of a tree is never"
+                    + " dropped");
+        }
+        return catalog.dropTimestamp(authority(catalog, modellingAuthority), moment).stream()
+                .map(SnapshotInfo::iri).toList();
+    }
+
+    /**
+     * One statement of {@code db.changes_between(...)}.
+     *
+     * @param index    the position of the statement in the answer
+     * @param profile  the profile of the difference it belongs to
+     * @param subject  the mRID of the object
+     * @param property the property, {@code Class.attribute}
+     * @param value    the value: a literal, or the mRID or IRI an association points at
+     * @param side     {@code forward} (holds at the second snapshot) or {@code reverse} (held at the first)
+     */
+    public record ChangeRow(int index, String profile, String subject, String property, String value, String side) {
+    }
+
+    /**
+     * The changes that lead from one snapshot of a tree to another, composed into one difference per profile.
+     *
+     * @return one row per statement, forward statements first per profile
+     */
+    public static List<ChangeRow> changesBetween(RdfDbConnection db, String scenario, String modellingAuthority,
+                                                 String fromVersion, String fromTimestamp, String toVersion,
+                                                 String toTimestamp) {
+        SnapshotCatalog catalog = db.snapshots(requireScenario(scenario));
+        String authority = authority(catalog, modellingAuthority);
+        DifferenceModelSet set = RdfDbNetworkLoader.changesBetween(db,
+                SnapshotRef.of(scenario, authority, toInstant(fromTimestamp), fromVersion),
+                SnapshotRef.of(scenario, authority, toInstant(toTimestamp), toVersion));
+        List<ChangeRow> rows = new ArrayList<>();
+        set.models().forEach((subset, model) -> {
+            String profile = Profiles.of(subset);
+            model.forward().forEach(st -> rows.add(new ChangeRow(rows.size(), profile, st.subjectId(),
+                    st.property(), st.value(), "forward")));
+            model.reverse().forEach(st -> rows.add(new ChangeRow(rows.size(), profile, st.subjectId(),
+                    st.property(), st.value(), "reverse")));
+        });
+        return rows;
+    }
+
+    /**
+     * @return the mapper turning the changes between two snapshots into a dataframe
+     */
+    public static DataframeMapper<List<ChangeRow>, Void> changesMapper() {
+        return CHANGES_MAPPER;
     }
 
     /**
@@ -1003,11 +1113,25 @@ public final class RdfDbUtil {
     public static List<String> loadCgmes(RdfDbConnection db, ReadOnlyDataSource ds, String scenario, String version,
                                          String timestamp, String modellingAuthority, List<String> profiles,
                                          Map<String, String> parameters, ReportNode reportNode) {
+        return loadCgmes(db, ds, scenario, version, timestamp, modellingAuthority, profiles, null, parameters,
+                reportNode);
+    }
+
+    /**
+     * {@link #loadCgmes(RdfDbConnection, ReadOnlyDataSource, String, String, String, String, List, Map, ReportNode)}
+     * with the snapshot a new timestamp hangs off.
+     *
+     * @param pin the pin of a new timestamp, as {@link #pin} builds it; {@code null} for the latest rollover at or
+     *            before the timestamp
+     */
+    public static List<String> loadCgmes(RdfDbConnection db, ReadOnlyDataSource ds, String scenario, String version,
+                                         String timestamp, String modellingAuthority, List<String> profiles,
+                                         PinArgs pin, Map<String, String> parameters, ReportNode reportNode) {
         requireScenario(scenario);
         Instant moment = toInstant(timestamp);
         String authority = blankToNull(modellingAuthority);
         Set<String> projection = toProfiles(profiles);
-        if (version == null && moment == null && authority == null) {
+        if (version == null && moment == null && authority == null && pin == null) {
             if (projection != null) {
                 throw new PowsyblException("profiles select what a snapshot stores, and an upload with neither a"
                         + " version, a timestamp nor a modelling authority stores no snapshot: pass version='1' to"
@@ -1020,8 +1144,12 @@ public final class RdfDbUtil {
         ReportNode rn = orNoOp(reportNode);
         SnapshotRef ref = SnapshotRef.of(scenario, authority, moment, version);
         boolean hasRoot = authority == null ? catalog.isVersioned() : catalog.root(authority).isPresent();
+        if (!hasRoot && pin != null) {
+            throw new PowsyblException("the files become the root of their tree, and a root hangs off nothing: drop"
+                    + " the pin");
+        }
         SnapshotInfo written = hasRoot
-                ? catalog.putAsDiff(ds, null, ref, projection, props, rn)
+                ? catalog.putAsDiff(ds, null, ref, projection, pin(catalog, pin, authority), props, rn)
                 : catalog.putFull(ds, null, ref, projection, props, rn);
         return List.copyOf(written.members());
     }
@@ -1047,6 +1175,20 @@ public final class RdfDbUtil {
     public static List<String> exportRecording(NetworkEventRecording recording, RdfDbConnection db, String scenario,
                                                String version, String timestamp, String modellingAuthority,
                                                List<String> profiles, Map<String, String> options) {
+        return exportRecording(recording, db, scenario, version, timestamp, modellingAuthority, profiles, null,
+                options);
+    }
+
+    /**
+     * {@link #exportRecording(NetworkEventRecording, RdfDbConnection, String, String, String, String, List, Map)}
+     * with the snapshot a new timestamp hangs off.
+     *
+     * @param pin the pin of a new timestamp, {@code null} for the default (the snapshot the network is at when it
+     *            states what the changes supersede, else the deepest snapshot that does)
+     */
+    public static List<String> exportRecording(NetworkEventRecording recording, RdfDbConnection db, String scenario,
+                                               String version, String timestamp, String modellingAuthority,
+                                               List<String> profiles, PinArgs pin, Map<String, String> options) {
         requireScenario(scenario);
         Instant moment = toInstant(timestamp);
         String authority = blankToNull(modellingAuthority);
@@ -1059,6 +1201,10 @@ public final class RdfDbUtil {
                     .collect(Collectors.toCollection(() -> EnumSet.noneOf(CgmesSubset.class))));
         }
         if (variant != null) {
+            if (pin != null) {
+                throw new PowsyblException("a variant export writes the successor of the snapshot variant '"
+                        + variant + "' stands for, so it takes no pin");
+            }
             if (moment != null || authority != null) {
                 throw new PowsyblException("a variant export writes the successor of the snapshot variant '"
                         + variant + "' stands for, so its timestamp and modelling authority are that variant's own;"
@@ -1074,10 +1220,12 @@ public final class RdfDbUtil {
                     RdfDbExport.exportVariant(recording.getNetwork(), events, db, variant, version,
                             exportOptions, ReportNode.NO_OP)));
         }
-        SnapshotRef target = SnapshotRef.of(scenario, onlyAuthority(db.snapshots(scenario), authority), moment,
-                version);
+        SnapshotCatalog catalog = db.snapshots(scenario);
+        SnapshotRef target = SnapshotRef.of(scenario, onlyAuthority(catalog, authority), moment, version);
+        SnapshotRef pinRef = pin(catalog, pin, target.modellingAuthority());
         return recording.exportWithSnapshot(events -> storedIds(
-                RdfDbExport.export(recording.getNetwork(), events, db, target, exportOptions, ReportNode.NO_OP)));
+                RdfDbExport.export(recording.getNetwork(), events, db, target, pinRef, exportOptions,
+                        ReportNode.NO_OP)));
     }
 
     /** A recorder translates network changes, which only ever touch the profiles the conversion reads. */

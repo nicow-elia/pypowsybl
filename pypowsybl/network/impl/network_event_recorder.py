@@ -34,8 +34,8 @@ from pandas import DataFrame
 import pypowsybl._pypowsybl as _pp
 from pypowsybl.utils import create_data_frame_from_series_array, path_to_str
 
-from .rdf_db import (_authority_to_str, _check_scenario, _check_variant, _profiles_to_list, _timestamp_to_str,
-                     _typed, _version_to_str)
+from .rdf_db import (SnapshotAddress, _authority_to_str, _check_scenario, _check_variant, _pin_to_args,
+                     _profiles_to_list, _timestamp_to_str, _typed, _version_to_str)
 
 if TYPE_CHECKING:
     from .network import Network
@@ -323,7 +323,8 @@ class NetworkEventRecorder:
     def to_rdf_updates(self, db: 'RdfDatabase', scenario: str, version: Optional[str] = None,
                        timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
                        profiles: Optional[Sequence[str]] = None, *, variant: Optional[str] = None,
-                       per_variant: bool = False, unsupported: str = 'raise', granularity: str = 'full_object',
+                       per_variant: bool = False, pin: Optional[Union[datetime.datetime, SnapshotAddress]] = None,
+                       unsupported: str = 'raise', granularity: str = 'full_object',
                        clear: bool = True, **metadata: ProfileValue) -> Union[List[str], DataFrame]:
         """
         Store the recorded changes straight into an RDF database, as a new snapshot of a scenario.
@@ -361,6 +362,11 @@ class NetworkEventRecorder:
                 ``modelling_authority``, ``profiles`` and ``variant`` must then be ``None``. Everything that can refuse happens before anything is written, so an unsupported
                 change under ``unsupported='raise'`` leaves the database untouched. It switches the network into
                 variant mode like ``variant=``
+            pin: the snapshot a **new** timestamp hangs off - a timestamp (its newest version) or a
+                ``(version, timestamp, modelling_authority)`` triple of the same tree, stating what the changes
+                supersede. ``None`` is the snapshot the network is at, when it is of another timestamp of the tree
+                and states what the changes supersede, else the deepest snapshot that does. Refused for an existing
+                timestamp, with ``variant``/``per_variant`` and on a composed network
             unsupported: as in :meth:`to_ssh`
             granularity: as in :meth:`to_cgmes_diff`
             clear: drop the recorded events after a successful write (the default), so that the next
@@ -397,6 +403,9 @@ class NetworkEventRecorder:
         """
         self._check_network()
         _check_scenario(scenario)
+        if pin is not None and (per_variant or variant is not None):
+            raise ValueError('a variant export writes the successor of the variant\'s own snapshot, so it takes no '
+                             'pin')
         if per_variant and (timestamp is not None or modelling_authority is not None or profiles is not None
                             or variant is not None):
             raise ValueError('per_variant=True writes every variant the changes were recorded on, each as the '
@@ -414,10 +423,11 @@ class NetworkEventRecorder:
             raise ValueError('a variant export writes the successor of the snapshot that variant stands for, so '
                              'its timestamp and modelling authority are that variant\'s own; drop them')
         options = self._flatten_options(unsupported, granularity, metadata, variant)
+        has_pin, pin_version, pin_timestamp, pin_authority = _pin_to_args(pin)
         ids = _pp.export_network_events_to_rdf_db(
             self._handle, db._check_open(), scenario,  # pylint: disable=protected-access
             _version_to_str(version), _timestamp_to_str(timestamp), _authority_to_str(modelling_authority),
-            _profiles_to_list(profiles), options)
+            _profiles_to_list(profiles), has_pin, pin_version, pin_timestamp, pin_authority, options)
         if clear:
             self.clear()
         return ids

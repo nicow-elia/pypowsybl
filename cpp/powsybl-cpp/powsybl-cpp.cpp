@@ -1707,6 +1707,8 @@ std::vector<std::string> loadCgmesToRdfDb(const JavaHandle& db, const std::strin
                                           const std::string& version, const std::string& timestamp,
                                           const std::string& modellingAuthority,
                                           const std::vector<std::string>& profiles,
+                                          bool hasPin, const std::string& pinVersion,
+                                          const std::string& pinTimestamp, const std::string& pinAuthority,
                                           const std::map<std::string, std::string>& parameters, JavaHandle* reportNode) {
     StringMapArgs args(parameters);
     ToCharPtrPtr profilesPtr(profiles);
@@ -1714,7 +1716,9 @@ std::vector<std::string> loadCgmesToRdfDb(const JavaHandle& db, const std::strin
                                                                   (char*) scenario.data(), (char*) version.data(),
                                                                   (char*) timestamp.data(),
                                                                   (char*) modellingAuthority.data(),
-                                                                  profilesPtr.get(), profiles.size(),
+                                                                  profilesPtr.get(), profiles.size(), hasPin,
+                                                                  (char*) pinVersion.data(), (char*) pinTimestamp.data(),
+                                                                  (char*) pinAuthority.data(),
                                                                   args.keys(), args.size(), args.values(), args.size(),
                                                                   (reportNode == nullptr) ? nullptr : *reportNode);
     ToStringVector graphs(graphsArrayPtr);
@@ -1725,6 +1729,8 @@ std::vector<std::string> loadCgmesBuffersToRdfDb(const JavaHandle& db, char** da
                                                  const std::string& scenario, const std::string& version,
                                                  const std::string& timestamp, const std::string& modellingAuthority,
                                                  const std::vector<std::string>& profiles,
+                                                 bool hasPin, const std::string& pinVersion,
+                                                 const std::string& pinTimestamp, const std::string& pinAuthority,
                                                  const std::map<std::string, std::string>& parameters,
                                                  JavaHandle* reportNode) {
     StringMapArgs args(parameters);
@@ -1734,7 +1740,9 @@ std::vector<std::string> loadCgmesBuffersToRdfDb(const JavaHandle& db, char** da
                                                                   (char*) version.data(),
                                                                   (char*) timestamp.data(),
                                                                   (char*) modellingAuthority.data(),
-                                                                  profilesPtr.get(), profiles.size(),
+                                                                  profilesPtr.get(), profiles.size(), hasPin,
+                                                                  (char*) pinVersion.data(), (char*) pinTimestamp.data(),
+                                                                  (char*) pinAuthority.data(),
                                                                   args.keys(), args.size(), args.values(), args.size(),
                                                                   (reportNode == nullptr) ? nullptr : *reportNode);
     ToStringVector graphs(graphsArrayPtr);
@@ -1840,6 +1848,8 @@ std::vector<std::string> exportNetworkEventsToRdfDb(const JavaHandle& recorder, 
                                                     const std::string& timestamp,
                                                     const std::string& modellingAuthority,
                                                     const std::vector<std::string>& profiles,
+                                                    bool hasPin, const std::string& pinVersion,
+                                                    const std::string& pinTimestamp, const std::string& pinAuthority,
                                                     const std::map<std::string, std::string>& options) {
     StringMapArgs args(options);
     ToCharPtrPtr profilesPtr(profiles);
@@ -1847,7 +1857,9 @@ std::vector<std::string> exportNetworkEventsToRdfDb(const JavaHandle& recorder, 
                                                                (char*) scenario.data(), (char*) version.data(),
                                                                (char*) timestamp.data(),
                                                                (char*) modellingAuthority.data(),
-                                                               profilesPtr.get(), profiles.size(),
+                                                               profilesPtr.get(), profiles.size(), hasPin,
+                                                               (char*) pinVersion.data(), (char*) pinTimestamp.data(),
+                                                               (char*) pinAuthority.data(),
                                                                args.keys(), args.size(), args.values(), args.size());
     ToStringVector ids(idsArrayPtr);
     return ids.get();
@@ -1932,6 +1944,35 @@ std::map<std::string, std::string> getRdfDbProfiles(const JavaHandle& db, const 
 SeriesArray* fetchRdfDbGraph(const JavaHandle& db, const std::string& scenario, const std::string& graph) {
     return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::fetchRdfDbGraph, db, (char*) scenario.data(),
                                                                   (char*) graph.data()));
+}
+
+std::string rolloverRdfDbSnapshot(const JavaHandle& db, const std::string& scenario, const std::string& version,
+                                  bool exact, const std::string& timestamp, const std::string& modellingAuthority) {
+    return toString(PowsyblCaller::get()->callJava<char*>(::rolloverRdfDbSnapshot, db, (char*) scenario.data(),
+                                                          (char*) version.data(), exact, (char*) timestamp.data(),
+                                                          (char*) modellingAuthority.data()));
+}
+
+std::vector<std::string> dropRdfDbTimestamp(const JavaHandle& db, const std::string& scenario,
+                                            const std::string& timestamp, const std::string& modellingAuthority) {
+    auto* droppedPtr = PowsyblCaller::get()->callJava<array*>(::dropRdfDbTimestamp, db, (char*) scenario.data(),
+                                                              (char*) timestamp.data(),
+                                                              (char*) modellingAuthority.data());
+    ToStringVector dropped(droppedPtr);
+    return dropped.get();
+}
+
+SeriesArray* getRdfDbChangesBetween(const JavaHandle& db, const std::string& scenario,
+                                    const std::string& modellingAuthority, const std::string& fromVersion,
+                                    const std::string& fromTimestamp, const std::string& toVersion,
+                                    const std::string& toTimestamp) {
+    return new SeriesArray(PowsyblCaller::get()->callJava<array*>(::getRdfDbChangesBetween, db,
+                                                                  (char*) scenario.data(),
+                                                                  (char*) modellingAuthority.data(),
+                                                                  (char*) fromVersion.data(),
+                                                                  (char*) fromTimestamp.data(),
+                                                                  (char*) toVersion.data(),
+                                                                  (char*) toTimestamp.data()));
 }
 
 JavaHandle createFlowDecomposition() {

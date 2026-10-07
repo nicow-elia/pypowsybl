@@ -30,6 +30,8 @@ void updateNetworkFromBinaryBuffersPython(const pypowsybl::JavaHandle& network, 
 std::vector<std::string> loadCgmesBuffersToRdfDbPython(const pypowsybl::JavaHandle& db, std::vector<py::buffer> byteBuffers,
                                                        const std::string& scenario, const std::string& version, const std::string& timestamp,
                                                        const std::string& modellingAuthority, const std::vector<std::string>& profiles,
+                                                       bool hasPin, const std::string& pinVersion, const std::string& pinTimestamp,
+                                                       const std::string& pinAuthority,
                                                        const std::map<std::string, std::string>& parameters, pypowsybl::JavaHandle* reportNode);
 
 
@@ -1241,10 +1243,12 @@ PYBIND11_MODULE(_pypowsybl, m) {
     m.def("load_cgmes_to_rdf_db", &pypowsybl::loadCgmesToRdfDb, "Read CGMES files into a scenario of an RDF graph database",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("file"), py::arg("scenario"),
           py::arg("version"), py::arg("timestamp"), py::arg("modelling_authority"), py::arg("profiles"),
+          py::arg("has_pin"), py::arg("pin_version"), py::arg("pin_timestamp"), py::arg("pin_authority"),
           py::arg("parameters"), py::arg("report_node"));
     m.def("load_cgmes_buffers_to_rdf_db", loadCgmesBuffersToRdfDbPython, "Read CGMES zip buffers into a scenario of an RDF graph database",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("buffers"), py::arg("scenario"),
           py::arg("version"), py::arg("timestamp"), py::arg("modelling_authority"), py::arg("profiles"),
+          py::arg("has_pin"), py::arg("pin_version"), py::arg("pin_timestamp"), py::arg("pin_authority"),
           py::arg("parameters"), py::arg("report_node"));
     m.def("load_network_from_rdf_db", &pypowsybl::loadNetworkFromRdfDb, "Build a network from a scenario of an RDF graph database",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("version"),
@@ -1282,7 +1286,8 @@ PYBIND11_MODULE(_pypowsybl, m) {
     m.def("export_network_events_to_rdf_db", &pypowsybl::exportNetworkEventsToRdfDb,
           "Store recorded changes as a new snapshot of a scenario", py::call_guard<py::gil_scoped_release>(),
           py::arg("recorder"), py::arg("db"), py::arg("scenario"), py::arg("version"), py::arg("timestamp"),
-          py::arg("modelling_authority"), py::arg("profiles"), py::arg("options"));
+          py::arg("modelling_authority"), py::arg("profiles"), py::arg("has_pin"), py::arg("pin_version"),
+          py::arg("pin_timestamp"), py::arg("pin_authority"), py::arg("options"));
     m.def("get_network_rdf_db_identity", &pypowsybl::getNetworkRdfDbIdentity,
           "Where a network, or one of its variants, stands in an RDF database",
           py::call_guard<py::gil_scoped_release>(),
@@ -1312,6 +1317,15 @@ PYBIND11_MODULE(_pypowsybl, m) {
           py::arg("exact"), py::arg("timestamp"), py::arg("modelling_authority"));
     m.def("fetch_rdf_db_graph", &pypowsybl::fetchRdfDbGraph, "Create a series array of the statements of one stored graph",
           py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("graph"));
+    m.def("rollover_rdf_db_snapshot", &pypowsybl::rolloverRdfDbSnapshot, "Flag a snapshot as a rollover and checkpoint it",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("version"),
+          py::arg("exact"), py::arg("timestamp"), py::arg("modelling_authority"));
+    m.def("drop_rdf_db_timestamp", &pypowsybl::dropRdfDbTimestamp, "Drop one timestamp of a tree",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("timestamp"),
+          py::arg("modelling_authority"));
+    m.def("get_rdf_db_changes_between", &pypowsybl::getRdfDbChangesBetween, "Create a series array of the changes between two snapshots",
+          py::call_guard<py::gil_scoped_release>(), py::arg("db"), py::arg("scenario"), py::arg("modelling_authority"),
+          py::arg("from_version"), py::arg("from_timestamp"), py::arg("to_version"), py::arg("to_timestamp"));
     m.def("create_glsk_document", &pypowsybl::createGLSKdocument, "Create a glsk importer.", py::arg("filename"));
 
     m.def("get_glsk_injection_keys", &pypowsybl::getGLSKinjectionkeys, "Get glsk injection keys available for a country", py::arg("network"), py::arg("importer"), py::arg("country"), py::arg("instant"));
@@ -1683,6 +1697,8 @@ pypowsybl::JavaHandle loadNetworkFromBinaryBuffersPython(std::vector<py::buffer>
 std::vector<std::string> loadCgmesBuffersToRdfDbPython(const pypowsybl::JavaHandle& db, std::vector<py::buffer> byteBuffers,
                                                        const std::string& scenario, const std::string& version, const std::string& timestamp,
                                                        const std::string& modellingAuthority, const std::vector<std::string>& profiles,
+                                                       bool hasPin, const std::string& pinVersion, const std::string& pinTimestamp,
+                                                       const std::string& pinAuthority,
                                                        const std::map<std::string, std::string>& parameters, pypowsybl::JavaHandle* reportNode) {
     char** dataPtrs = new char*[byteBuffers.size()];
     int* dataSizes = new int[byteBuffers.size()];
@@ -1694,7 +1710,8 @@ std::vector<std::string> loadCgmesBuffersToRdfDbPython(const pypowsybl::JavaHand
     try {
         std::vector<std::string> graphs = pypowsybl::loadCgmesBuffersToRdfDb(db, dataPtrs, dataSizes, byteBuffers.size(),
                                                                              scenario, version, timestamp, modellingAuthority,
-                                                                             profiles, parameters, reportNode);
+                                                                             profiles, hasPin, pinVersion, pinTimestamp,
+                                                                             pinAuthority, parameters, reportNode);
         delete[] dataPtrs;
         delete[] dataSizes;
         return graphs;

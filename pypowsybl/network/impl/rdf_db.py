@@ -132,6 +132,24 @@ def _authority_to_str(modelling_authority: Optional[str]) -> str:
     return modelling_authority
 
 
+def _pin_to_args(pin: Optional[Union[datetime.datetime, 'SnapshotAddress']]) -> Tuple[bool, str, str, str]:
+    """
+    Turn a pin - the snapshot a new timestamp hangs off - into the four arguments the native layer takes: whether
+    one is given, and its version, timestamp and modelling authority. A plain datetime is the newest version of that
+    timestamp in the target's tree.
+
+    Raises:
+        TypeError: the pin is neither a datetime nor a ``(version, timestamp, modelling_authority)`` triple
+    """
+    if pin is None:
+        return False, '', '', ''
+    if isinstance(pin, datetime.datetime):
+        return True, '', _timestamp_to_str(pin), ''
+    if isinstance(pin, (tuple, list)) and len(pin) == 3:
+        return True, _version_to_str(pin[0]), _timestamp_to_str(pin[1]), _authority_to_str(pin[2])
+    raise TypeError(f'pin is a timestamp or a (version, timestamp, modelling_authority) triple, got {pin!r}')
+
+
 def _profiles_to_list(profiles: Optional[Sequence[str]]) -> List[str]:
     """
     Check a profile projection; ``None`` (the default of the call) is the empty list.
@@ -481,7 +499,8 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
             ``modelling_authority``, ``timestamp`` (``datetime64[ns, UTC]``), ``version`` (str, the name), ``rank``
             (``int64``, the rank the registry gives that name), ``profiles`` (the CGMES profiles the snapshot's state covers, ``;``-joined), ``kind``
             (``full``/``diff``), ``parent`` (snapshot IRI or empty), ``edge`` (``version``/``timestamp``/empty),
-            ``depth`` (int), ``has_full`` (bool), ``fast`` (bool: reachable by the in-place diff route), ``members``
+            ``depth`` (int), ``has_full`` (bool), ``fast`` (bool: reachable by the in-place diff route),
+            ``rollover`` (bool: a snapshot later timestamps hang off by default, see :meth:`rollover`), ``members``
             (the stored model ids, ``;``-joined), ``created`` (ISO) and ``description``. Sorted by modelling
             authority, timestamp, depth, then rank. A scenario the database does not hold gives an empty frame with those
             columns.
@@ -518,8 +537,8 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
         Returns:
             a dataframe indexed by ``timestamp`` (``datetime64[ns, UTC]``) with the columns
             ``modelling_authority``, ``root`` (IRI of the timestamp's root snapshot), ``head`` (IRI of its newest
-            version), ``version_count`` (int) and ``pinned_base`` (IRI of the base-chain snapshot the timestamp
-            derives from, empty for the base timestamp). Oldest first
+            version), ``version_count`` (int) and ``pin`` (IRI of the snapshot the timestamp hangs off - any snapshot
+            of another timestamp of the tree -, empty for the base timestamp). Oldest first
         """
         return _typed(create_data_frame_from_series_array(
             _pp.get_rdf_db_timestamps(self._check_open(), _check_scenario(scenario),
@@ -626,6 +645,81 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
             _pp.fetch_rdf_db_graph(self._check_open(), _check_scenario(scenario), graph))
         return frame.reset_index(drop=True)
 
+    def rollover(self, scenario: str, version: Optional[str] = None, timestamp: Optional[datetime.datetime] = None,
+                 modelling_authority: Optional[str] = None, *, exact: bool = False) -> str:
+        """
+        Flag a snapshot as a **rollover** and checkpoint it at once.
+
+        A timestamp ingested from files hangs off the latest rollover at or before it - the root until another one
+        is flagged - and is stored as the difference against it. Rolling over where the equipment drifted keeps the
+        later timestamps small. Idempotent; nothing already stored is re-pinned.
+
+        Args:
+            scenario: the scenario holding the snapshot
+            version: the version name, ``None`` for the newest one
+            timestamp: the moment, a timezone-aware datetime; ``None`` for the base timestamp
+            modelling_authority: the tree; ``None`` for the only one of the scenario
+            exact: address exactly ``version``
+
+        Returns:
+            the IRI of the snapshot that is now a rollover
+        """
+        if exact and version is None:
+            raise ValueError('exact=True addresses exactly the named version: give a version')
+        return _pp.rollover_rdf_db_snapshot(self._check_open(), _check_scenario(scenario), _version_to_str(version),
+                                            exact, _timestamp_to_str(timestamp),
+                                            _authority_to_str(modelling_authority))
+
+    def drop_timestamp(self, scenario: str, timestamp: datetime.datetime,
+                       modelling_authority: Optional[str] = None) -> List[str]:
+        """
+        Drop one timestamp - every version of it, with the graphs only it uses.
+
+        Refused for the base timestamp, and for a timestamp another one is pinned to (the refusal names them; drop
+        those first - there is no cascade).
+
+        Args:
+            scenario: the scenario
+            timestamp: the moment to drop, a timezone-aware datetime; required
+            modelling_authority: the tree; ``None`` for the only one of the scenario
+
+        Returns:
+            the IRIs of the dropped snapshots, oldest first
+        """
+        if timestamp is None:
+            raise TypeError('drop_timestamp() needs a timestamp: the base timestamp is never dropped')
+        return _pp.drop_rdf_db_timestamp(self._check_open(), _check_scenario(scenario), _timestamp_to_str(timestamp),
+                                         _authority_to_str(modelling_authority))
+
+    def changes_between(self, scenario: str, from_timestamp: Optional[datetime.datetime],
+                        to_timestamp: Optional[datetime.datetime], *, from_version: Optional[str] = None,
+                        to_version: Optional[str] = None, modelling_authority: Optional[str] = None) -> DataFrame:
+        """
+        The changes that lead from one snapshot to another, as one composed difference.
+
+        The path between the two through their common ancestor is planned and its stored differences are composed,
+        the upward ones turned round, into what a network at the first snapshot has to apply to be at the second.
+        Both snapshots must be of one tree: differences never cross scenarios or modelling authorities.
+
+        Args:
+            scenario: the scenario
+            from_timestamp: the moment of the first snapshot; ``None`` for the base timestamp
+            to_timestamp: the moment of the second snapshot; ``None`` for the base timestamp
+            from_version: the version of the first snapshot, ``None`` for the newest one
+            to_version: the version of the second snapshot, ``None`` for the newest one
+            modelling_authority: the tree; ``None`` for the only one of the scenario
+
+        Returns:
+            a dataframe with one row per statement and the columns ``profile``, ``subject`` (the mRID),
+            ``property`` (``Class.attribute``), ``value`` and ``side`` (``forward``: the statement holds at the
+            second snapshot; ``reverse``: it held at the first). Empty when the two are the same snapshot
+        """
+        frame = create_data_frame_from_series_array(_pp.get_rdf_db_changes_between(
+            self._check_open(), _check_scenario(scenario), _authority_to_str(modelling_authority),
+            _version_to_str(from_version), _timestamp_to_str(from_timestamp), _version_to_str(to_version),
+            _timestamp_to_str(to_timestamp)))
+        return frame.reset_index(drop=True)
+
     def registry(self, scenario: str) -> VersionRegistry:
         """
         The version registry of a scenario: its version names and the ranks they are compared by.
@@ -687,7 +781,9 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
 
     def load_cgmes(self, file: Union[str, PathLike], scenario: str, version: Optional[str] = None,
                    timestamp: Optional[datetime.datetime] = None, modelling_authority: Optional[str] = None,
-                   profiles: Optional[Sequence[str]] = None, *, parameters: Optional[Dict[str, str]] = None,
+                   profiles: Optional[Sequence[str]] = None, *,
+                   pin: Optional[Union[datetime.datetime, SnapshotAddress]] = None,
+                   parameters: Optional[Dict[str, str]] = None,
                    report_node: Optional[ReportNode] = None) -> List[str]:
         """
         Read CGMES instance files into a scenario of the database.
@@ -730,6 +826,10 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
                 snapshot, the profiles to compare (``None``: ``EQ`` and ``SSH``). A custom profile - a file named
                 ``<base>_<PROFILE>.xml`` with an ``md:FullModel`` header, ``OP`` for ``Grid_OP.xml`` - is stored
                 whole: by a root always, by a further snapshot when ``profiles`` names it
+            pin: the snapshot a **new** timestamp hangs off and is compared against - a timestamp (its newest
+                version) or a ``(version, timestamp, modelling_authority)`` triple, of the same tree. ``None`` is the
+                latest rollover at or before the timestamp (the root until :meth:`rollover` flags another one). A
+                pin is chosen when a timestamp is created: naming one for an existing timestamp is refused
             parameters: a dictionary of CGMES import parameters; only the ones that influence how identifiers are
                 read matter here, and the very same ones must be passed to :func:`from_rdf_db`
             report_node: the reporter to be used to create an execution report, default is None (no report)
@@ -749,15 +849,18 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
             variables and topology change wholesale between timestamps, so their files are left alone and the
             snapshot inherits the ones of the state it derives from - unless ``profiles`` names them.
         """
+        has_pin, pin_version, pin_timestamp, pin_authority = _pin_to_args(pin)
         return _pp.load_cgmes_to_rdf_db(self._check_open(), path_to_str(file), _check_scenario(scenario),
                                         _version_to_str(version), _timestamp_to_str(timestamp),
                                         _authority_to_str(modelling_authority), _profiles_to_list(profiles),
+                                        has_pin, pin_version, pin_timestamp, pin_authority,
                                         {} if parameters is None else parameters, _report_handle(report_node))
 
     def load_cgmes_from_binary_buffers(self, buffers: List[io.BytesIO], scenario: str, version: Optional[str] = None,
                                        timestamp: Optional[datetime.datetime] = None,
                                        modelling_authority: Optional[str] = None,
                                        profiles: Optional[Sequence[str]] = None, *,
+                                       pin: Optional[Union[datetime.datetime, SnapshotAddress]] = None,
                                        parameters: Optional[Dict[str, str]] = None,
                                        report_node: Optional[ReportNode] = None) -> List[str]:
         """
@@ -770,6 +873,7 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
             timestamp: the moment the files describe, a timezone-aware datetime; ``None`` for the base timestamp
             modelling_authority: the tree the files belong to; ``None`` as in :meth:`load_cgmes`
             profiles: the profiles to store or compare, ``None`` for the default
+            pin: the snapshot a new timestamp hangs off, see :meth:`load_cgmes`
             parameters: a dictionary of CGMES import parameters
             report_node: the reporter to be used to create an execution report, default is None (no report)
 
@@ -778,9 +882,11 @@ class RdfDatabase:  # pylint: disable=too-many-public-methods  # the catalogue o
             behaviour this shares exactly - including ingesting a further timestamp of a versioned scenario
         """
         buffer_list = [buffer.getbuffer() for buffer in buffers]
+        has_pin, pin_version, pin_timestamp, pin_authority = _pin_to_args(pin)
         return _pp.load_cgmes_buffers_to_rdf_db(self._check_open(), buffer_list, _check_scenario(scenario),
                                                 _version_to_str(version), _timestamp_to_str(timestamp),
                                                 _authority_to_str(modelling_authority), _profiles_to_list(profiles),
+                                                has_pin, pin_version, pin_timestamp, pin_authority,
                                                 {} if parameters is None else parameters, _report_handle(report_node))
 
 

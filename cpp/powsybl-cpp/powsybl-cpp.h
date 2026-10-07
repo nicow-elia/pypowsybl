@@ -994,6 +994,8 @@ std::vector<std::string> loadCgmesToRdfDb(const JavaHandle& db, const std::strin
                                           const std::string& version, const std::string& timestamp,
                                           const std::string& modellingAuthority,
                                           const std::vector<std::string>& profiles,
+                                          bool hasPin, const std::string& pinVersion,
+                                          const std::string& pinTimestamp, const std::string& pinAuthority,
                                           const std::map<std::string, std::string>& parameters, JavaHandle* reportNode);
 
 /**
@@ -1004,6 +1006,8 @@ std::vector<std::string> loadCgmesBuffersToRdfDb(const JavaHandle& db, char** da
                                                  const std::string& scenario, const std::string& version,
                                                  const std::string& timestamp, const std::string& modellingAuthority,
                                                  const std::vector<std::string>& profiles,
+                                                 bool hasPin, const std::string& pinVersion,
+                                                 const std::string& pinTimestamp, const std::string& pinAuthority,
                                                  const std::map<std::string, std::string>& parameters,
                                                  JavaHandle* reportNode);
 
@@ -1055,6 +1059,8 @@ std::vector<std::string> exportNetworkEventsToRdfDb(const JavaHandle& recorder, 
                                                     const std::string& timestamp,
                                                     const std::string& modellingAuthority,
                                                     const std::vector<std::string>& profiles,
+                                                    bool hasPin, const std::string& pinVersion,
+                                                    const std::string& pinTimestamp, const std::string& pinAuthority,
                                                     const std::map<std::string, std::string>& options);
 
 std::map<std::string, std::string> getNetworkRdfDbIdentity(const JavaHandle& network, JavaHandle* db,
@@ -1103,6 +1109,18 @@ std::map<std::string, std::string> getRdfDbProfiles(const JavaHandle& db, const 
                                                     const std::string& modellingAuthority);
 
 SeriesArray* fetchRdfDbGraph(const JavaHandle& db, const std::string& scenario, const std::string& graph);
+
+/** Pins and rollovers: flag and checkpoint a rollover, drop a timestamp, the changes between two snapshots. */
+std::string rolloverRdfDbSnapshot(const JavaHandle& db, const std::string& scenario, const std::string& version,
+                                  bool exact, const std::string& timestamp, const std::string& modellingAuthority);
+
+std::vector<std::string> dropRdfDbTimestamp(const JavaHandle& db, const std::string& scenario,
+                                            const std::string& timestamp, const std::string& modellingAuthority);
+
+SeriesArray* getRdfDbChangesBetween(const JavaHandle& db, const std::string& scenario,
+                                    const std::string& modellingAuthority, const std::string& fromVersion,
+                                    const std::string& fromTimestamp, const std::string& toVersion,
+                                    const std::string& toTimestamp);
 
 JavaHandle createGLSKdocument(std::string& filename);
 

@@ -243,8 +243,8 @@ Everything after that is a difference, and it can be written in two ways:
   difference against the state they derive from, which is how a TSO's day of ninety-six timestamps gets in.
 
 Both end up in the same chain and are read back the same way. A new version of the same timestamp grows the chain
-of that moment; an address whose timestamp the tree does not hold yet starts a new timestamp, hanging off the base
-chain.
+of that moment; an address whose timestamp the tree does not hold yet starts a new timestamp, hanging off a
+**pin** - another snapshot of the tree (see `Pins and rollovers`_).
 
 How an address is written (``t`` an aware datetime):
 
@@ -363,7 +363,8 @@ with one call, naming the moment it describes::
             moment = base + timedelta(minutes=15 * i)
             db.load_cgmes(f'day/{moment:%H%M}.zip', '2021-02-09', None, moment)
 
-The state each set derives from is materialised, the files are compared against it profile by profile - the
+The state each set derives from - its pin, by default the latest **rollover** at or before the timestamp, the root
+until another one is flagged - is materialised, the files are compared against it profile by profile - the
 equipment model and the steady state hypothesis unless ``profiles`` names others - and the difference is stored, so
 what the database holds is the base plus what each timestamp changed, not ninety-six copies of the grid. The
 boundary has to be the one the scenario was rooted with; a changed boundary is refused rather than silently mixed in.
@@ -391,6 +392,38 @@ graph as a dataframe of statements (``subject``, ``predicate``, ``object``, ``is
 
 A recorder writes network changes, which only touch the nine; naming a custom profile in
 :meth:`NetworkEventRecorder.to_rdf_updates` is refused.
+
+Pins and rollovers
+------------------
+
+Every timestamp but the base one hangs off a **pin**: a snapshot of another timestamp of the same tree, which is
+the state the timestamp is the difference against. :meth:`RdfDatabase.timestamps` shows it in the ``pin`` column.
+The defaults:
+
+* a timestamp **ingested from files** hangs off the latest **rollover** at or before it. The root is a rollover;
+  :meth:`RdfDatabase.rollover` flags another snapshot (and checkpoints it at once), so that the timestamps after it
+  are stored as their difference to *it* - roll over where the equipment drifted, and the day stays small;
+* a timestamp written by a **recorder** hangs off the snapshot the network is at, when that one states what the
+  changes supersede, else off the deepest snapshot that does.
+
+``pin=`` on :meth:`RdfDatabase.load_cgmes` and :meth:`NetworkEventRecorder.to_rdf_updates` names another one - a
+timestamp (its newest version) or a ``(version, timestamp, modelling_authority)`` triple. A pin is chosen when a
+timestamp is created: naming one for a timestamp that exists is refused, its versions grow on its head::
+
+    rolled = db.rollover('2021-02-09', None, t1200)                     # the afternoon diffs against 12:00
+    db.load_cgmes('day/1215.zip', '2021-02-09', None, t1215)            # pinned to 12:00
+    db.load_cgmes('day/1230.zip', '2021-02-09', None, t1230, pin=BASE)  # pinned to the root, explicitly
+    db.timestamps('2021-02-09')['pin']
+
+:meth:`RdfDatabase.drop_timestamp` drops one timestamp with every version of it and the graphs only it uses; the
+base timestamp and a timestamp another one is pinned to are refused (the refusal names them - there is no cascade).
+
+:meth:`RdfDatabase.changes_between` answers what leads from one snapshot of a tree to another, as one composed
+difference: one row per statement with ``profile``, ``subject``, ``property``, ``value`` and ``side`` - ``forward``
+for what holds at the second snapshot, ``reverse`` for what held at the first::
+
+    changes = db.changes_between('2021-02-09', t1200, t1215)
+    changes[changes['side'] == 'forward']
 
 Loading and updating
 --------------------
@@ -781,6 +814,8 @@ Limitations
   clear the scenario and ingest it again.
 * ``query_mode='remote'`` cannot read a scenario that holds differences or snapshots.
 * Variants are lost on a full reload, and recorders created before one are refused (see above).
+* Rollovers are flagged explicitly; the library never rolls over by itself, and flagging one re-pins nothing that
+  is already stored.
 * ``post_processors`` are only honoured when nothing is addressed and no ``profiles`` are given; the snapshot entry
   points of the core library take no load options, and neither does the variant bulk load.
 * In variant mode, a difference that writes something IIDM does not store per variant - limits, impedances, the

@@ -23,6 +23,7 @@ import java.io.OutputStream;
 import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.function.BinaryOperator;
@@ -445,6 +446,60 @@ class RdfDbUtilVersionedTest {
         }
     }
 
+    /**
+     * A root is a rollover; an ingested timestamp hangs off the latest rollover at or before it unless a pin is
+     * named; the changes between two timestamps are one composed difference; a timestamp nothing depends on can be
+     * dropped.
+     */
+    @Test
+    void rolloversPinsChangesAndDroppedTimestamps() {
+        try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
+            twoScenarios(db);
+            String root = RdfDbUtil.snapshots(db, S).get(0).iri();
+            assertTrue(RdfDbUtil.snapshots(db, S).get(0).rollover(), "a root is a rollover");
+            ingest(db, S, timestampFiles("t0815", 1.1, T0815, false), null, T0815);
+            String rollover = RdfDbUtil.rollover(db, S, null, false, T0815, null);
+            ingest(db, S, timestampFiles("t0830", 1.2, T0830, false), null, T0830);
+            RdfDbUtil.loadCgmes(db, timestampFiles("t0845", 1.3, T0845, false), S, null, T0845, null, List.of(),
+                    new RdfDbUtil.PinArgs(null, null, null), importParameters(), null);
+
+            Map<Instant, String> pins = new HashMap<>();
+            RdfDbUtil.timestamps(db, S, null).forEach(t -> pins.put(t.timestamp(), t.pin()));
+            assertEquals(rollover, pins.get(Instant.parse(T0830)), "the latest rollover at or before it");
+            assertEquals(root, pins.get(Instant.parse(T0845)), "the pin named: the newest version of the base");
+            assertEquals(List.of("timestamp", "modelling_authority", "root", "head", "version_count", "pin"),
+                    columns(RdfDbUtil.timestampsMapper(), RdfDbUtil.timestamps(db, S, null)));
+            assertThat(RdfDbUtil.snapshots(db, S)).filteredOn(SnapshotInfo::rollover)
+                    .extracting(SnapshotInfo::iri).containsExactlyInAnyOrder(root, rollover);
+            assertThatThrownBy(() -> RdfDbUtil.loadCgmes(db, timestampFiles("again", 1.4, T0830, false), S, null,
+                    T0830, null, List.of(), new RdfDbUtil.PinArgs(null, null, null), importParameters(), null))
+                    .as("a pin is chosen when a timestamp is created")
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("already exists");
+
+            List<RdfDbUtil.ChangeRow> changes = RdfDbUtil.changesBetween(db, S, null, null, T0815, null, T0830);
+            assertThat(changes).isNotEmpty().allMatch(row -> row.profile().equals("SSH"));
+            assertThat(changes).extracting(RdfDbUtil.ChangeRow::side).contains("forward", "reverse");
+            Load load = load(db, S, null, T0830).getLoads().iterator().next();
+            assertThat(changes).anyMatch(row -> row.side().equals("forward") && row.subject().equals(load.getId())
+                    && row.property().equals("EnergyConsumer.p")
+                    && Math.abs(Double.parseDouble(row.value()) - load.getP0()) < 1e-6);
+            assertThat(RdfDbUtil.changesBetween(db, S, null, null, T0830, null, T0830)).isEmpty();
+            assertEquals(List.of("index", "profile", "subject", "property", "value", "side"),
+                    columns(RdfDbUtil.changesMapper(), changes));
+
+            assertThatThrownBy(() -> RdfDbUtil.dropTimestamp(db, S, T0815, null))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("is the pin of");
+            assertThatThrownBy(() -> RdfDbUtil.dropTimestamp(db, S, "", null))
+                    .isInstanceOf(PowsyblException.class)
+                    .hasMessageContaining("needs a timestamp");
+            assertEquals(1, RdfDbUtil.dropTimestamp(db, S, T0830, null).size());
+            assertEquals(1, RdfDbUtil.dropTimestamp(db, S, T0815, null).size(), "nothing depends on it any more");
+            assertEquals(2, RdfDbUtil.timestamps(db, S, null).size());
+        }
+    }
+
     @Test
     void aRootAndThenVersionsFromARecording() {
         try (RdfDbConnection db = RdfDbUtil.open(memoryUrl(), Map.of())) {
@@ -772,11 +827,10 @@ class RdfDbUtilVersionedTest {
             assertEquals(BE, RdfDbUtil.scenarioRows(db).stream().filter(row -> row.scenario().equals(S))
                     .findFirst().orElseThrow().modellingAuthorities());
             assertEquals(List.of("snapshot", "scenario", "modelling_authority", "timestamp", "version", "rank",
-                            "profiles", "kind", "parent", "edge", "depth", "has_full", "fast", "members", "created",
-                            "description"),
+                            "profiles", "kind", "parent", "edge", "depth", "has_full", "fast", "rollover", "members",
+                            "created", "description"),
                     columns(RdfDbUtil.snapshotsMapper(), RdfDbUtil.snapshots(db, S)));
-            assertEquals(List.of("timestamp", "modelling_authority", "root", "head", "version_count",
-                            "pinned_base"),
+            assertEquals(List.of("timestamp", "modelling_authority", "root", "head", "version_count", "pin"),
                     columns(RdfDbUtil.timestampsMapper(), RdfDbUtil.timestamps(db, S, null)));
             assertEquals(List.of("id", "scenario", "subset", "kind", "version", "supersedes", "depends_on", "fast",
                             "triple_count", "chain_depth", "created"),
